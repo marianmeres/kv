@@ -1,7 +1,7 @@
 import {
 	AdapterAbstract,
-	Operation,
-	SetOptions,
+	type Operation,
+	type SetOptions,
 	type AdapterAbstractOptions,
 } from "./abstract.ts";
 import { createLogger } from "@marianmeres/clog";
@@ -19,7 +19,7 @@ export interface AdapterPostgresOptions extends AdapterAbstractOptions {
 export class AdapterPostgres extends AdapterAbstract {
 	override _type = "postgres";
 
-	protected override _options: AdapterPostgresOptions = {
+	override readonly options: AdapterPostgresOptions = {
 		defaultTtl: 0, // no ttl by default
 		logger: createLogger("KV/memory"),
 		db: null as any,
@@ -35,14 +35,14 @@ export class AdapterPostgres extends AdapterAbstract {
 	) {
 		super();
 		this._assertValidNamespace();
-		this._options = { ...this._options, ...(options || {}) };
-		if (!this._options.db) {
+		this.options = { ...this.options, ...(options || {}) };
+		if (!this.options.db) {
 			throw new Error("Missing pg instance");
 		}
 	}
 
 	async initialize(): Promise<void> {
-		const { db, tableName } = this._options;
+		const { db, tableName } = this.options;
 
 		// so we can work with "schema." prefix in naming things...
 		const safe = (name: string) => `${name}`.replace(/\W/g, "");
@@ -65,13 +65,11 @@ export class AdapterPostgres extends AdapterAbstract {
 
 		this._initialized = true;
 		this.#maybeTTLCleanup();
-
-		return Promise.resolve();
 	}
 
 	async destroy(hard?: boolean): Promise<void> {
 		if (hard) {
-			const { db, tableName } = this._options;
+			const { db, tableName } = this.options;
 			await db.query(`DROP TABLE IF EXISTS ${tableName}`);
 		}
 		this._initialized = false;
@@ -80,8 +78,8 @@ export class AdapterPostgres extends AdapterAbstract {
 
 	async #maybeTTLCleanup() {
 		clearTimeout(this.#cleanupTimer); // safety
-		if (this._options.ttlCleanupIntervalSec) {
-			const { db, tableName, logger } = this._options;
+		if (this.options.ttlCleanupIntervalSec) {
+			const { db, tableName, logger } = this.options;
 
 			// do the cleanup now
 			try {
@@ -95,7 +93,7 @@ export class AdapterPostgres extends AdapterAbstract {
 			// schedule next...
 			this.#cleanupTimer = setTimeout(
 				this.#maybeTTLCleanup.bind(this),
-				this._options.ttlCleanupIntervalSec * 1000
+				this.options.ttlCleanupIntervalSec * 1000
 			);
 		}
 	}
@@ -114,8 +112,8 @@ export class AdapterPostgres extends AdapterAbstract {
 		this._assertInitialized();
 		key = this._withNs(key);
 
-		const { db, tableName } = this._options;
-		const ttl = options.ttl || this._options.defaultTtl;
+		const { db, tableName } = this.options;
+		const ttl = options.ttl || this.options.defaultTtl;
 		const expiresAt = ttl ? new Date(Date.now() + ttl * 1000) : null;
 
 		// a.k.a. UPSERT
@@ -137,7 +135,7 @@ export class AdapterPostgres extends AdapterAbstract {
 		this._assertInitialized();
 		key = this._withNs(key);
 
-		const { db, tableName } = this._options;
+		const { db, tableName } = this.options;
 		const { rows } = await db.query(
 			`SELECT value, expires_at 
             FROM ${tableName} 
@@ -151,11 +149,11 @@ export class AdapterPostgres extends AdapterAbstract {
 	}
 
 	/** Will delete the key from the underlying store */
-	override async delete(key: string): Promise<any> {
+	override async delete(key: string): Promise<boolean> {
 		this._assertInitialized();
 		key = this._withNs(key);
 
-		const { db, tableName } = this._options;
+		const { db, tableName } = this.options;
 		const { rowCount } = await db.query(
 			`DELETE FROM ${tableName} WHERE key = $1`,
 			[key]
@@ -165,11 +163,11 @@ export class AdapterPostgres extends AdapterAbstract {
 	}
 
 	/** Will check if the key exists in the underlying store */
-	override async exists(key: string): Promise<any> {
+	override async exists(key: string): Promise<boolean> {
 		this._assertInitialized();
 		key = this._withNs(key);
 
-		const { db, tableName } = this._options;
+		const { db, tableName } = this.options;
 		const { rows } = await db.query(
 			`SELECT 1 FROM ${tableName} 
             WHERE key = $1 AND (expires_at IS NULL OR expires_at > NOW())`,
@@ -181,10 +179,10 @@ export class AdapterPostgres extends AdapterAbstract {
 
 	/** Will list all existing keys in the underlying store matching given pattern.
 	 * Recognizes redis-like star wildcard format. */
-	override async keys(pattern: string): Promise<any> {
+	override async keys(pattern: string): Promise<string[]> {
 		this._assertInitialized();
 
-		const { db, tableName } = this._options;
+		const { db, tableName } = this.options;
 		let params: string[] = [];
 
 		const query = `
@@ -200,19 +198,21 @@ export class AdapterPostgres extends AdapterAbstract {
 		}
 
 		const { rows } = await db.query(query, params);
-		return rows.map((row) => {
-			let k = row.key;
-			// strip namespace if exists
-			if (this.namespace) k = k.slice(this.namespace.length);
-			return k;
-		});
+		return rows
+			.map((row) => {
+				let k = row.key;
+				// strip namespace if exists
+				if (this.namespace) k = k.slice(this.namespace.length);
+				return k;
+			})
+			.toSorted();
 	}
 
 	/** Will clear all existing keys in the underlying store matching given pattern */
 	override async clear(pattern: string): Promise<number> {
 		this._assertInitialized();
 
-		const { db, tableName } = this._options;
+		const { db, tableName } = this.options;
 		let params: string[] = [];
 
 		const query = `DELETE FROM ${tableName} WHERE key LIKE $1`;
@@ -233,8 +233,8 @@ export class AdapterPostgres extends AdapterAbstract {
 	): Promise<boolean[]> {
 		this._assertInitialized();
 
-		const { db, tableName } = this._options;
-		const ttl = options.ttl || this._options.defaultTtl;
+		const { db, tableName } = this.options;
+		const ttl = options.ttl || this.options.defaultTtl;
 		const expiresAt = ttl ? new Date(Date.now() + ttl * 1000) : null;
 
 		const values = Object.entries(keyValuePairs)
@@ -269,7 +269,7 @@ export class AdapterPostgres extends AdapterAbstract {
 
 		const placeholders = keys.map((_, i) => `$${i + 1}`).join(", ");
 
-		const { db, tableName } = this._options;
+		const { db, tableName } = this.options;
 		const sql = `
             SELECT key, value 
             FROM ${tableName} 
@@ -299,7 +299,7 @@ export class AdapterPostgres extends AdapterAbstract {
 		this._assertInitialized();
 		key = this._withNs(key);
 
-		const { db, tableName } = this._options;
+		const { db, tableName } = this.options;
 		const expiresAt = new Date(Date.now() + ttl * 1000);
 
 		const { rowCount } = await db.query(
@@ -317,10 +317,10 @@ export class AdapterPostgres extends AdapterAbstract {
 		this._assertInitialized();
 		key = this._withNs(key);
 
-		const { db, tableName } = this._options;
+		const { db, tableName } = this.options;
 
 		const { rows } = await db.query(
-			`SELECT expires_at  FROM ${tableName} WHERE key = $1`,
+			`SELECT expires_at FROM ${tableName} WHERE key = $1`,
 			[key]
 		);
 
@@ -331,14 +331,13 @@ export class AdapterPostgres extends AdapterAbstract {
 		// No expiration set
 		if (!expiresAt) return null;
 
-		const remaining = Math.max(0, new Date(expiresAt).valueOf() - Date.now());
-		return Promise.resolve(new Date(Date.now() + Math.ceil(remaining)));
+		return new Date(expiresAt);
 	}
 
 	/**  */
 	override async transaction(operations: Operation[]): Promise<any[]> {
 		this._assertInitialized();
-		const { db, logger } = this._options;
+		const { db, logger } = this.options;
 
 		const results = [];
 
@@ -373,7 +372,7 @@ export class AdapterPostgres extends AdapterAbstract {
 	> {
 		this._assertInitialized();
 
-		const { db, tableName } = this._options;
+		const { db, tableName } = this.options;
 
 		const { rows } = await db.query(
 			`SELECT key, value, expires_at FROM ${tableName} WHERE key LIKE $1`,

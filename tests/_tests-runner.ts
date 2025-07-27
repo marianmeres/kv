@@ -5,6 +5,7 @@ import { createPg } from "./_pg.ts";
 import { createKVClient } from "../src/kv.ts";
 import type { AdapterMemory } from "../src/adapter/memory.ts";
 import type { AdapterPostgres } from "../src/adapter/postgres.ts";
+import { createRedis } from "./_redis.ts";
 
 export function testsRunner(
 	tests: {
@@ -30,11 +31,18 @@ export function testsRunner(
 				? () => def.fn({ dbPg: null as any, clients: null as any })
 				: async () => {
 						const dbPg = await createPg();
+
+						// redis init
+						const dbRedis = await createRedis();
+						await dbRedis.connect();
+						await dbRedis.flushDb();
+
 						const ns = "app:";
 
 						const clients = {
-							memory: createKVClient("memory", ns),
-							postgres: createKVClient("postgres", ns, { db: dbPg }),
+							memory: createKVClient(ns, "memory"),
+							postgres: createKVClient(ns, "postgres", { db: dbPg }),
+							redis: createKVClient(ns, "redis", { db: dbRedis }),
 						};
 
 						for (const client of Object.values(clients)) {
@@ -51,6 +59,7 @@ export function testsRunner(
 								await client.destroy();
 							}
 							await dbPg?.end();
+							await dbRedis?.destroy();
 						}
 				  }
 		);

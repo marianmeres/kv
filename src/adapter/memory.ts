@@ -14,7 +14,7 @@ export interface AdapterMemoryOptions extends AdapterAbstractOptions {
 export class AdapterMemory extends AdapterAbstract {
 	override _type = "memory";
 
-	protected override _options: AdapterMemoryOptions = {
+	override readonly options: AdapterMemoryOptions = {
 		defaultTtl: 0, // no ttl by default
 		ttlCleanupIntervalSec: 0,
 		logger: createLogger("KV/memory"),
@@ -29,7 +29,7 @@ export class AdapterMemory extends AdapterAbstract {
 		options: Partial<AdapterMemoryOptions> = {}
 	) {
 		super();
-		this._options = { ...this._options, ...(options || {}) };
+		this.options = { ...this.options, ...(options || {}) };
 		this._assertValidNamespace();
 	}
 
@@ -49,7 +49,7 @@ export class AdapterMemory extends AdapterAbstract {
 
 	#maybeTTLCleanup() {
 		clearTimeout(this.#cleanupTimer); // safety
-		if (this._options.ttlCleanupIntervalSec) {
+		if (this.options.ttlCleanupIntervalSec) {
 			// do the cleanup now
 			const now = new Date();
 			for (const [key, expiresAt] of this.#expirations.entries()) {
@@ -62,7 +62,7 @@ export class AdapterMemory extends AdapterAbstract {
 			// schedule next...
 			this.#cleanupTimer = setTimeout(
 				this.#maybeTTLCleanup.bind(this),
-				this._options.ttlCleanupIntervalSec * 1000
+				this.options.ttlCleanupIntervalSec * 1000
 			);
 		}
 	}
@@ -92,7 +92,7 @@ export class AdapterMemory extends AdapterAbstract {
 		// to be consistent across adapters, keeping internally the strigified version...
 		this.#store.set(key, JSON.stringify(value));
 
-		const ttl = options.ttl || this._options.defaultTtl;
+		const ttl = options.ttl || this.options.defaultTtl;
 		if (ttl) {
 			this.#expirations.set(key, new Date(Date.now() + ttl * 1_000));
 		} else {
@@ -118,7 +118,7 @@ export class AdapterMemory extends AdapterAbstract {
 	}
 
 	/** Will delete the key from the underlying store */
-	override delete(key: string): Promise<any> {
+	override delete(key: string): Promise<boolean> {
 		this._assertInitialized();
 		key = this._withNs(key);
 		const existed = this.#store.has(key);
@@ -128,7 +128,7 @@ export class AdapterMemory extends AdapterAbstract {
 	}
 
 	/** Will check if the key exists in the underlying store */
-	override exists(key: string): Promise<any> {
+	override exists(key: string): Promise<boolean> {
 		this._assertInitialized();
 		key = this._withNs(key);
 		if (this.#isExpired(key)) return Promise.resolve(false);
@@ -137,7 +137,7 @@ export class AdapterMemory extends AdapterAbstract {
 
 	/** Will list all existing keys in the underlying store matching given pattern.
 	 * Recognizes redis-like star wildcard format. */
-	override keys(pattern: string): Promise<any> {
+	override keys(pattern: string): Promise<string[]> {
 		this._assertInitialized();
 		const all = Array.from(this.#store.keys())
 			.filter((key) => !this.#isExpired(key))
@@ -145,7 +145,8 @@ export class AdapterMemory extends AdapterAbstract {
 				// strip namespace if exists
 				if (this.namespace) k = k.slice(this.namespace.length);
 				return k;
-			});
+			})
+			.toSorted();
 
 		if (pattern === "*") return Promise.resolve(all);
 
@@ -228,8 +229,9 @@ export class AdapterMemory extends AdapterAbstract {
 		// No expiration set
 		if (!expiresAt) return Promise.resolve(null);
 
-		const remaining = Math.max(0, expiresAt.valueOf() - Date.now());
-		return Promise.resolve(new Date(Date.now() + Math.ceil(remaining)));
+		return Promise.resolve(expiresAt);
+		// const remaining = Math.max(0, expiresAt.valueOf() - Date.now());
+		// return Promise.resolve(new Date(Date.now() + Math.ceil(remaining)));
 	}
 
 	/**  */

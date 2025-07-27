@@ -29,7 +29,7 @@ function notImplemented(): any {
 export abstract class AdapterAbstract {
 	protected _type: string = "abstract";
 
-	protected _options: AdapterAbstractOptions = {
+	readonly options: AdapterAbstractOptions = {
 		defaultTtl: 0, // no ttl by default
 	};
 
@@ -44,7 +44,7 @@ export abstract class AdapterAbstract {
 		public readonly namespace: string = "",
 		options: Partial<AdapterAbstractOptions> = {}
 	) {
-		this._options = { ...this._options, ...(options || {}) };
+		this.options = { ...this.options, ...(options || {}) };
 		this._assertValidNamespace();
 	}
 
@@ -103,7 +103,7 @@ export abstract class AdapterAbstract {
 
 	/** Will list all existing keys in the underlying store matching given pattern.
 	 * Recognizes redis-like star wildcard format. */
-	keys(pattern: string): Promise<any> {
+	keys(pattern: string): Promise<string[]> {
 		return notImplemented();
 	}
 

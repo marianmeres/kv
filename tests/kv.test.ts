@@ -17,9 +17,21 @@ testsRunner([
 		// only: true,
 	},
 	{
+		name: "basic set/get works",
+		async fn({ clients }) {
+			for (const [_type, client] of Object.entries(clients)) {
+				assert(await client.set(k, v));
+				assertEquals(await client.get(k), v);
+				// console.log(_type, await client.get(k));
+			}
+		},
+		// only: true,
+	},
+	{
 		name: "basics work",
 		async fn({ clients }) {
 			for (const [_type, client] of Object.entries(clients)) {
+				// if (_type !== "redis") continue;
 				assert(await client.set(k, v));
 				assert(await client.set("hey", "ho"));
 				assertEquals(await client.get(k), v);
@@ -28,7 +40,7 @@ testsRunner([
 				assertEquals(await client.exists("asdf"), false);
 				assertEquals(await client.keys("*"), ["foo:bar", "hey"]);
 				assertEquals(await client.keys("foo:*"), ["foo:bar"]);
-				// console.log(await client.__debug_dump());
+				// console.log(1234, await client.__debug_dump());
 
 				// clear some
 				assertEquals(await client.clear("foo:*"), 1);
@@ -136,14 +148,18 @@ testsRunner([
 		async fn({ clients }) {
 			for (const [_type, client] of Object.entries(clients)) {
 				const res = await client.transaction([
-					{ type: "set", key: "foo:1", value: "bar" },
+					{ type: "set", key: "foo:1", value: { hey: "ho" } },
 					{ type: "get", key: "foo:1" },
 					{ type: "set", key: "foo:2", value: "baz" },
 					{ type: "delete", key: "foo:1" },
 					{ type: "delete", key: "asdf" }, // false
 				]);
 
-				assertEquals(res, [true, "bar", true, true, false]);
+				assertEquals(
+					res,
+					[true, { hey: "ho" }, true, true, false],
+					`(Type: ${_type})`
+				);
 				assertEquals(await client.keys("foo:*"), ["foo:2"]);
 				// console.log(await client.__debug_dump());
 			}
@@ -153,22 +169,28 @@ testsRunner([
 	{
 		name: "cleanup works",
 		async fn({ clients }) {
-			const client = createKVClient("memory", "", {
-				defaultTtl: 1,
-				ttlCleanupIntervalSec: 1,
-			});
-			await client.initialize();
-			await client.set(k, v);
+			for (const [_type, _client] of Object.entries(clients)) {
+				// skip redis here...
+				if (_type === "redis") continue;
 
-			await sleep(1_010);
+				const client = createKVClient("", _type as any, {
+					defaultTtl: 1,
+					ttlCleanupIntervalSec: 1,
+					db: _client.options.db,
+				});
+				await client.initialize();
+				await client.set(k, v);
 
-			// "false" means expired (but this is ttl related, not cleanup)
-			assertEquals(await client.ttl(k), false);
+				await sleep(1_010);
 
-			// if not cleaned up, it wouldn't be empty
-			// assertEquals(await client.__debug_dump(), {});
+				// "false" means expired (but this is ttl related, not cleanup)
+				assertEquals(await client.ttl(k), false);
 
-			await client.destroy();
+				// if not cleaned up, it wouldn't be empty
+				assertEquals(await client.__debug_dump(), {});
+
+				await client.destroy();
+			}
 		},
 		// only: true,
 	},
