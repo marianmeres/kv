@@ -62,11 +62,11 @@ export abstract class AdapterAbstract {
 		}
 	}
 
-	protected _withNs(key: string) {
+	protected _withNs(key: string): string {
 		return this.namespace + key;
 	}
 
-	protected _withoutNs(key: string) {
+	protected _withoutNs(key: string): string {
 		if (this.namespace) key = key.slice(this.namespace.length);
 		return key;
 	}
