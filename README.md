@@ -26,7 +26,7 @@ const client = createKVClient(
     "my-app-namespace", 
     type: 'redis' | 'postgres' | 'memory' = 'memory', 
     db: ..., // redisClient (for redis) or pg.Pool/pg.Client (for postgres)...
-    options, // adapter specific options
+    options, // other options
 );
 
 //
