@@ -8,6 +8,7 @@ import {
 import { createLogger } from "@marianmeres/clog";
 
 export interface AdapterRedisOptions extends AdapterAbstractOptions {
+	// pool support is experimental, and was not tested
 	db: ReturnType<typeof createClient> | ReturnType<typeof createClientPool>;
 	isCluster: boolean;
 }
