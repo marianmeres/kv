@@ -49,7 +49,7 @@ export class AdapterPostgres extends AdapterAbstract {
 
 		await db.query(`
             CREATE TABLE IF NOT EXISTS ${tableName} (
-                key VARCHAR(255) PRIMARY KEY,
+                key VARCHAR(512) PRIMARY KEY,
                 value JSONB NOT NULL,
                 expires_at TIMESTAMP WITH TIME ZONE,
                 created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
