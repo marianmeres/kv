@@ -21,7 +21,7 @@ export class AdapterPostgres extends AdapterAbstract {
 
 	override readonly options: AdapterPostgresOptions = {
 		defaultTtl: 0, // no ttl by default
-		logger: createLogger("KV/memory"),
+		logger: createLogger("KV/postgres"),
 		db: null as any,
 		tableName: "__kv",
 		ttlCleanupIntervalSec: 0,
