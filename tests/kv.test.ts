@@ -72,6 +72,7 @@ testsRunner([
 				assertEquals(await client.keys("user:456:*"), ["user:456:foo"]);
 				assertEquals(await client.clear("user:*"), 3);
 				assertEquals(await client.keys("*"), ["foo:bar"]);
+				assertEquals(await client.clear("user:*"), 0);
 			}
 		},
 		// only: true,
