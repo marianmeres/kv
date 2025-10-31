@@ -35,7 +35,7 @@ export class AdapterPostgres extends AdapterAbstract {
 	) {
 		super();
 		this._assertValidNamespace();
-		this.options = { ...this.options, ...(options || {}) };
+		this.options = Object.freeze({ ...this.options, ...(options || {}) });
 		if (!this.options.db) {
 			throw new Error("Missing pg instance");
 		}

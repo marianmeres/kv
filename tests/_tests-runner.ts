@@ -37,12 +37,16 @@ export function testsRunner(
 						await dbRedis.connect();
 						await dbRedis.flushDb();
 
+						//
+						const dbDenoKv = await Deno.openKv(":memory:");
+
 						const ns = "app:";
 
 						const clients = {
 							memory: createKVClient(ns, "memory"),
 							postgres: createKVClient(ns, "postgres", { db: dbPg }),
 							redis: createKVClient(ns, "redis", { db: dbRedis }),
+							"deno-kv": createKVClient(ns, "deno-kv", { db: dbDenoKv }),
 						};
 
 						for (const client of Object.values(clients)) {
@@ -60,6 +64,7 @@ export function testsRunner(
 							}
 							await dbPg?.end();
 							await dbRedis?.destroy();
+							await dbDenoKv?.close();
 						}
 				  }
 		);

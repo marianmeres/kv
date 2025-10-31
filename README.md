@@ -4,10 +4,9 @@ Key-value storage abstraction layer with support of multiple backend adapters:
 - redis 
 - postgresql
 - memory
+- Deno KV
 
 The API is inspired by the Redis API.
-
-TODO: Deno KV adapter
 
 ## Installation
 
@@ -26,7 +25,7 @@ import { createKVClient } from '@marianmeres/kv';
 
 const client = createKVClient(
     "my-app-namespace", 
-    type: 'redis' | 'postgres' | 'memory' = 'memory', 
+    type: 'redis' | 'postgres' | 'deno-kv' | 'memory' = 'memory', 
     options, // options... redisClient (for redis) or pg.Pool/pg.Client (for postgres)...
 );
 

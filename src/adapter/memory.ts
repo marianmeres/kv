@@ -29,7 +29,7 @@ export class AdapterMemory extends AdapterAbstract {
 		options: Partial<AdapterMemoryOptions> = {}
 	) {
 		super();
-		this.options = { ...this.options, ...(options || {}) };
+		this.options = Object.freeze({ ...this.options, ...(options || {}) });
 		this._assertValidNamespace();
 	}
 

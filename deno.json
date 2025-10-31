@@ -3,18 +3,18 @@
 	"version": "1.0.4",
 	"exports": "./src/mod.ts",
 	"tasks": {
-		"test": "deno test -A --env-file --watch",
+		"test": "deno test --unstable-kv -A --env-file --watch",
 		"npm:build": "deno run -A scripts/build-npm.ts",
 		"npm:publish": "deno run -A scripts/build-npm.ts && cd ./.npm-dist && npm publish --access=public"
 	},
 	"imports": {
 		"@marianmeres/clog": "jsr:@marianmeres/clog@^2.3.3",
-		"@std/assert": "jsr:@std/assert@^1.0.14",
+		"@std/assert": "jsr:@std/assert@^1.0.15",
 		"@std/fs": "jsr:@std/fs@^1.0.19",
 		"@std/path": "jsr:@std/path@^1.1.2",
-		"@types/pg": "npm:@types/pg@^8.15.5",
+		"@types/pg": "npm:@types/pg@^8.15.6",
 		"pg": "npm:pg@^8.16.3",
-		"redis": "npm:redis@^5.8.1"
+		"redis": "npm:redis@^5.9.0"
 	},
 	"fmt": {
 		"useTabs": true,

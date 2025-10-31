@@ -55,7 +55,11 @@ testsRunner([
 				// set + delete
 				assert(await client.set(k, v));
 				assertEquals(await client.delete(k), true);
-				assertEquals(await client.delete("not-existing"), false);
+
+				if (_type !== "deno-kv") {
+					assertEquals(await client.delete("not-existing"), false);
+				}
+
 				assertEquals(await client.clear("*"), 0);
 
 				await client.set(k, v);
@@ -72,6 +76,9 @@ testsRunner([
 				assertEquals(await client.keys("user:456:*"), ["user:456:foo"]);
 				assertEquals(await client.clear("user:*"), 3);
 				assertEquals(await client.keys("*"), ["foo:bar"]);
+				//
+				assertEquals(await client.clear("user:*"), 0);
+				assertEquals(await client.clear("user:*"), 0);
 				assertEquals(await client.clear("user:*"), 0);
 			}
 		},
@@ -105,6 +112,9 @@ testsRunner([
 		name: "expiration works",
 		async fn({ clients }) {
 			for (const [_type, client] of Object.entries(clients)) {
+				// this is not supported in deno.kv
+				if (["deno-kv"].includes(_type)) continue;
+
 				const now = Date.now();
 				await client.set(k, v, { ttl: 1 }); // 1 sec
 				assertEquals(await client.get(k), v);
@@ -153,12 +163,11 @@ testsRunner([
 					{ type: "get", key: "foo:1" },
 					{ type: "set", key: "foo:2", value: "baz" },
 					{ type: "delete", key: "foo:1" },
-					{ type: "delete", key: "asdf" }, // false
 				]);
 
 				assertEquals(
 					res,
-					[true, { hey: "ho" }, true, true, false],
+					[true, { hey: "ho" }, true, true],
 					`(Type: ${_type})`
 				);
 				assertEquals(await client.keys("foo:*"), ["foo:2"]);
@@ -171,8 +180,8 @@ testsRunner([
 		name: "cleanup works",
 		async fn({ clients }) {
 			for (const [_type, _client] of Object.entries(clients)) {
-				// skip redis here...
-				if (_type === "redis") continue;
+				// skip redis and deno here...
+				if (["redis", "deno-kv"].includes(_type)) continue;
 
 				const client = createKVClient("", _type as any, {
 					defaultTtl: 1,
@@ -191,6 +200,35 @@ testsRunner([
 				assertEquals(await client.__debug_dump(), {});
 
 				await client.destroy();
+			}
+		},
+		// only: true,
+	},
+	{
+		name: "deno kv playground",
+		async fn({ clients }) {
+			for (const [_type, client] of Object.entries(clients)) {
+				if (_type !== "deno-kv") continue;
+
+				// set/get
+				assert(await client.set(k, { foo: "bar" }));
+				assertEquals((await client.get(k)).foo, "bar");
+
+				// always null - not supported in Deno.Kv
+				assertEquals(await client.ttl(k), null);
+
+				//
+				assert(await client.exists(k));
+				assert(!(await client.exists("asdf")));
+
+				assertEquals(await client.keys("foo:*"), [k]);
+
+				//
+				assert(await client.delete(k));
+				assert(!(await client.exists(k)));
+
+				// true even for non-existent key
+				assert(await client.delete("asdf"));
 			}
 		},
 		// only: true,
