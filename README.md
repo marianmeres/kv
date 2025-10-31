@@ -4,7 +4,7 @@ Key-value storage abstraction layer with support of multiple backend adapters:
 - redis 
 - postgresql
 - memory
-- Deno KV
+- Deno KV (only in Deno runtime)
 
 The API is inspired by the Redis API.
 

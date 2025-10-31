@@ -23,7 +23,12 @@ export function createKVClient<T extends keyof KnownTypes>(
 	if (type === "memory") return new AdapterMemory(namespace, options);
 	if (type === "postgres") return new AdapterPostgres(namespace, options);
 	if (type === "redis") return new AdapterRedis(namespace, options);
-	if (type === "deno-kv") return new AdapterDenoKv(namespace, options);
+	if (type === "deno-kv") {
+		if (typeof Deno === "undefined") {
+			throw new Error(`Type "${type}" is only supported under Deno runtime`);
+		}
+		return new AdapterDenoKv(namespace, options);
+	}
 
 	//
 	throw new TypeError(`Unsupported KV client type "${options.type}"`);

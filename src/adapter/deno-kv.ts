@@ -1,14 +1,14 @@
 import { createLogger } from "@marianmeres/clog";
 import {
 	AdapterAbstract,
-	Operation,
-	SetOptions,
+	type Operation,
+	type SetOptions,
 	type AdapterAbstractOptions,
 } from "./abstract.ts";
 
 export interface AdapterDenoKvOptions extends AdapterAbstractOptions {
 	// https://docs.deno.com/deploy/kv/#testing
-	db: Deno.Kv;
+	db: any; // Deno.Kv;
 }
 
 export class AdapterDenoKv extends AdapterAbstract {
