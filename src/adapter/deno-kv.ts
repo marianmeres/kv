@@ -65,7 +65,8 @@ export class AdapterDenoKv extends AdapterAbstract {
 
 		if (value === undefined) value = null;
 		// Deno.Kv does not require this, but for the consistency with other adapters
-		// let's just stringify (the toJSON may do magic)
+		// let's just stringify (the toJSON may do magic, so we want consistent behavior
+		// across adapters)
 		value = JSON.stringify(value);
 
 		await db.set(this.#denoKvKey(key), value, {
@@ -74,16 +75,21 @@ export class AdapterDenoKv extends AdapterAbstract {
 		return true;
 	}
 
-	/** Will get the key from the underlying store */
-	override async get(key: string): Promise<any> {
-		this._assertInitialized();
-		const { db } = this.options;
-		const row = await db.get(this.#denoKvKey(key));
+	/** Will return the internal value */
+	#parseValue(row: { value?: string | null | undefined }) {
 		try {
 			return JSON.parse(`${row?.value ?? null}`);
 		} catch (_err) {
 			return row?.value;
 		}
+	}
+
+	/** Will get the key from the underlying store */
+	override async get(key: string): Promise<any> {
+		this._assertInitialized();
+		const { db } = this.options;
+		const row = await db.get(this.#denoKvKey(key));
+		return this.#parseValue(row);
 	}
 
 	/** Will check if the key exists in the underlying store */
@@ -157,15 +163,17 @@ export class AdapterDenoKv extends AdapterAbstract {
 		return results;
 	}
 
-	/** Will get multiple keys in one batch.
-	 * NOTE: Deno.Kv supports list, so that should be probably used
-	 */
+	/** Will get multiple keys in one batch. */
 	override async getMultiple(keys: string[]): Promise<Record<string, any>> {
 		this._assertInitialized();
+		const { db } = this.options;
 		const result: Record<string, any> = {};
 
-		for (const key of keys) {
-			result[key] = await this.get(key);
+		const denoKvKeys = keys.map((k) => this.#denoKvKey(k));
+		const results = await db.getMany(denoKvKeys);
+
+		for (const [index, row] of results.entries()) {
+			result[keys[index]] = this.#parseValue(row);
 		}
 
 		return result;
