@@ -188,6 +188,8 @@ export class AdapterDenoKv extends AdapterAbstract {
 		// note: memory operations are atomic by nature
 		const results = [];
 
+		// ignoring Deno.Kv's atomic feature...
+
 		try {
 			for (const op of operations) {
 				switch (op.type) {
@@ -216,10 +218,9 @@ export class AdapterDenoKv extends AdapterAbstract {
 		return Promise.resolve(false);
 	}
 
-	/** NOT SUPPORTED IN DENO KV... Will get the expiration Date for given key */
-	override async ttl(key: string): Promise<Date | null | false> {
+	/** Not supported in Deno.Kv */
+	override ttl(key: string): Promise<Date | null | false> {
 		this._assertInitialized();
-		//
 		return Promise.resolve(null);
 	}
 }
