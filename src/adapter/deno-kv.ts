@@ -184,7 +184,6 @@ export class AdapterDenoKv extends AdapterAbstract {
 		this._assertInitialized();
 		const { db } = this.options;
 
-		this._assertInitialized();
 		// note: memory operations are atomic by nature
 		const results = [];
 

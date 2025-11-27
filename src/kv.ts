@@ -32,5 +32,5 @@ export function createKVClient<T extends keyof KnownTypes>(
 	}
 
 	//
-	throw new TypeError(`Unsupported KV client type "${options.type}"`);
+	throw new TypeError(`Unsupported KV client type "${type}"`);
 }
