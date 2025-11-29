@@ -7,15 +7,52 @@ import {
 import { createLogger } from "@marianmeres/clog";
 import type pg from "pg";
 
+/**
+ * Configuration options for the PostgreSQL KV adapter.
+ */
 export interface AdapterPostgresOptions extends AdapterAbstractOptions {
-	/** pg.Pool or pg.Client instance */
+	/** PostgreSQL connection instance - either `pg.Pool` or `pg.Client`. */
 	db: pg.Pool | pg.Client;
-	/** */
+	/**
+	 * Name of the table to use for storing key-value pairs.
+	 * The table will be created automatically if it doesn't exist.
+	 * @default "__kv"
+	 */
 	tableName: string;
-	/** Set 0 to disable */
+	/**
+	 * Interval in seconds for automatic cleanup of expired keys.
+	 * Set to 0 to disable automatic cleanup.
+	 */
 	ttlCleanupIntervalSec: number;
 }
 
+/**
+ * PostgreSQL key-value storage adapter.
+ *
+ * Provides persistent key-value storage using PostgreSQL with JSONB values.
+ * Automatically creates the required table and indexes on initialization.
+ *
+ * @remarks
+ * - Uses UPSERT (INSERT ... ON CONFLICT) for atomic set operations
+ * - Uses PostgreSQL transactions for the `transaction()` method
+ * - Values are stored as JSONB for efficient querying
+ * - Supports automatic TTL cleanup via background timer
+ * - Table schema: key (VARCHAR), value (JSONB), expires_at, created_at, updated_at
+ *
+ * @example
+ * ```typescript
+ * import pg from 'pg';
+ *
+ * const pool = new pg.Pool({ connectionString: 'postgres://...' });
+ * const client = createKVClient("myapp:", "postgres", {
+ *   db: pool,
+ *   tableName: "kv_store",
+ *   ttlCleanupIntervalSec: 300, // Clean expired keys every 5 minutes
+ * });
+ * await client.initialize();
+ * await client.set("config:theme", { dark: true });
+ * ```
+ */
 export class AdapterPostgres extends AdapterAbstract {
 	override _type = "postgres";
 
@@ -41,7 +78,8 @@ export class AdapterPostgres extends AdapterAbstract {
 		}
 	}
 
-	async initialize(): Promise<void> {
+	/** @inheritdoc */
+	override async initialize(): Promise<void> {
 		const { db, tableName } = this.options;
 
 		// so we can work with "schema." prefix in naming things...
@@ -58,8 +96,8 @@ export class AdapterPostgres extends AdapterAbstract {
         `);
 
 		await db.query(`
-            CREATE INDEX IF NOT EXISTS idx_${safe(tableName)}_expires_at 
-                ON ${tableName} (expires_at) 
+            CREATE INDEX IF NOT EXISTS idx_${safe(tableName)}_expires_at
+                ON ${tableName} (expires_at)
                 WHERE expires_at IS NOT NULL
         `);
 
@@ -67,7 +105,8 @@ export class AdapterPostgres extends AdapterAbstract {
 		this.#maybeTTLCleanup();
 	}
 
-	async destroy(hard?: boolean): Promise<void> {
+	/** @inheritdoc */
+	override async destroy(hard?: boolean): Promise<void> {
 		if (hard) {
 			const { db, tableName } = this.options;
 			await db.query(`DROP TABLE IF EXISTS ${tableName}`);
@@ -103,7 +142,7 @@ export class AdapterPostgres extends AdapterAbstract {
 		return pattern.replace(/\*/g, "%").replace(/\?/g, "_");
 	}
 
-	/** Will set key-value pair to the underlying store with given options */
+	/** @inheritdoc */
 	override async set(
 		key: string,
 		value: any,
@@ -130,7 +169,7 @@ export class AdapterPostgres extends AdapterAbstract {
 		return true;
 	}
 
-	/** Will get the key from the underlying store */
+	/** @inheritdoc */
 	override async get(key: string): Promise<any> {
 		this._assertInitialized();
 		key = this._withNs(key);
@@ -148,7 +187,7 @@ export class AdapterPostgres extends AdapterAbstract {
 		return rows[0].value;
 	}
 
-	/** Will delete the key from the underlying store */
+	/** @inheritdoc */
 	override async delete(key: string): Promise<boolean> {
 		this._assertInitialized();
 		key = this._withNs(key);
@@ -162,7 +201,7 @@ export class AdapterPostgres extends AdapterAbstract {
 		return rowCount! > 0;
 	}
 
-	/** Will check if the key exists in the underlying store */
+	/** @inheritdoc */
 	override async exists(key: string): Promise<boolean> {
 		this._assertInitialized();
 		key = this._withNs(key);
@@ -177,8 +216,7 @@ export class AdapterPostgres extends AdapterAbstract {
 		return rows.length > 0;
 	}
 
-	/** Will list all existing keys in the underlying store matching given pattern.
-	 * Recognizes redis-like star wildcard format. */
+	/** @inheritdoc */
 	override async keys(pattern: string): Promise<string[]> {
 		this._assertInitialized();
 
@@ -208,7 +246,7 @@ export class AdapterPostgres extends AdapterAbstract {
 			.toSorted();
 	}
 
-	/** Will clear all existing keys in the underlying store matching given pattern */
+	/** @inheritdoc */
 	override async clear(pattern: string): Promise<number> {
 		this._assertInitialized();
 
@@ -226,7 +264,7 @@ export class AdapterPostgres extends AdapterAbstract {
 		return rowCount!;
 	}
 
-	/** Will set multiple kv pairs in one batch */
+	/** @inheritdoc */
 	override async setMultiple(
 		keyValuePairs: [string, any][],
 		options: Partial<SetOptions> = {}
@@ -261,7 +299,7 @@ export class AdapterPostgres extends AdapterAbstract {
 		return keyValuePairs.map(() => true);
 	}
 
-	/** Will get multiple keys in one batch */
+	/** @inheritdoc */
 	override async getMultiple(keys: string[]): Promise<Record<string, any>> {
 		this._assertInitialized();
 
@@ -294,7 +332,7 @@ export class AdapterPostgres extends AdapterAbstract {
 		return resultMap;
 	}
 
-	/** Will set the expiration ttl on the given key to given ttl value */
+	/** @inheritdoc */
 	override async expire(key: string, ttl: number): Promise<boolean> {
 		this._assertInitialized();
 		key = this._withNs(key);
@@ -312,7 +350,7 @@ export class AdapterPostgres extends AdapterAbstract {
 		return rowCount! > 0;
 	}
 
-	/** Will get the expiration Date for given key */
+	/** @inheritdoc */
 	override async ttl(key: string): Promise<Date | null | false> {
 		this._assertInitialized();
 		key = this._withNs(key);
@@ -334,7 +372,7 @@ export class AdapterPostgres extends AdapterAbstract {
 		return new Date(expiresAt);
 	}
 
-	/**  */
+	/** @inheritdoc */
 	override async transaction(operations: Operation[]): Promise<any[]> {
 		this._assertInitialized();
 		const { db, logger } = this.options;

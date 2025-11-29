@@ -6,11 +6,40 @@ import {
 	type SetOptions,
 } from "./abstract.ts";
 
+/**
+ * Configuration options for the in-memory KV adapter.
+ */
 export interface AdapterMemoryOptions extends AdapterAbstractOptions {
-	/** Set 0 to disable */
+	/**
+	 * Interval in seconds for automatic cleanup of expired keys.
+	 * Set to 0 to disable automatic cleanup (expired keys will still be
+	 * lazily removed on access).
+	 */
 	ttlCleanupIntervalSec: number;
 }
 
+/**
+ * In-memory key-value storage adapter.
+ *
+ * Stores all data in memory using JavaScript Maps. Data is not persisted
+ * and will be lost when the process exits.
+ *
+ * @remarks
+ * - Fast and simple, ideal for testing and caching
+ * - Supports TTL with optional automatic cleanup
+ * - Thread-safe within a single Node.js/Deno process
+ * - Not suitable for multi-process or distributed environments
+ *
+ * @example
+ * ```typescript
+ * const client = createKVClient("myapp:", "memory", {
+ *   defaultTtl: 3600,
+ *   ttlCleanupIntervalSec: 60, // Clean expired keys every minute
+ * });
+ * await client.initialize();
+ * await client.set("key", "value");
+ * ```
+ */
 export class AdapterMemory extends AdapterAbstract {
 	override _type = "memory";
 
@@ -33,15 +62,15 @@ export class AdapterMemory extends AdapterAbstract {
 		this._assertValidNamespace();
 	}
 
-	/** Will initialize the client instance */
-	initialize(): Promise<void> {
+	/** @inheritdoc */
+	override initialize(): Promise<void> {
 		this._initialized = true;
 		this.#maybeTTLCleanup();
-		return Promise.resolve(); // memory is always "connected"
+		return Promise.resolve();
 	}
 
-	/** Will destroy (do cleanups) on the instance */
-	destroy(_hard?: boolean): Promise<void> {
+	/** @inheritdoc */
+	override destroy(_hard?: boolean): Promise<void> {
 		this._initialized = false;
 		clearTimeout(this.#cleanupTimer);
 		return Promise.resolve();
@@ -80,7 +109,7 @@ export class AdapterMemory extends AdapterAbstract {
 		return false;
 	}
 
-	/** Will set key-value pair to the underlying store with given options */
+	/** @inheritdoc */
 	override set(
 		key: string,
 		value: any,
@@ -102,7 +131,7 @@ export class AdapterMemory extends AdapterAbstract {
 		return Promise.resolve(true);
 	}
 
-	/** Will get the key from the underlying store */
+	/** @inheritdoc */
 	override get(key: string): Promise<any> {
 		this._assertInitialized();
 		key = this._withNs(key);
@@ -117,7 +146,7 @@ export class AdapterMemory extends AdapterAbstract {
 		return JSON.parse(value);
 	}
 
-	/** Will delete the key from the underlying store */
+	/** @inheritdoc */
 	override delete(key: string): Promise<boolean> {
 		this._assertInitialized();
 		key = this._withNs(key);
@@ -127,7 +156,7 @@ export class AdapterMemory extends AdapterAbstract {
 		return Promise.resolve(existed);
 	}
 
-	/** Will check if the key exists in the underlying store */
+	/** @inheritdoc */
 	override exists(key: string): Promise<boolean> {
 		this._assertInitialized();
 		key = this._withNs(key);
@@ -135,8 +164,7 @@ export class AdapterMemory extends AdapterAbstract {
 		return Promise.resolve(this.#store.has(key));
 	}
 
-	/** Will list all existing keys in the underlying store matching given pattern.
-	 * Recognizes redis-like star wildcard format. */
+	/** @inheritdoc */
 	override keys(pattern: string): Promise<string[]> {
 		this._assertInitialized();
 		const all = Array.from(this.#store.keys())
@@ -157,7 +185,7 @@ export class AdapterMemory extends AdapterAbstract {
 		return Promise.resolve(all.filter((key) => regex.test(key)));
 	}
 
-	/** Will clear all existing keys in the underlying store matching given pattern */
+	/** @inheritdoc */
 	override async clear(pattern: string): Promise<number> {
 		this._assertInitialized();
 		const keysToDelete = await this.keys(pattern);
@@ -173,7 +201,7 @@ export class AdapterMemory extends AdapterAbstract {
 		return deleteCount;
 	}
 
-	/** Will set multiple kv pairs in one batch */
+	/** @inheritdoc */
 	override async setMultiple(
 		keyValuePairs: [string, any][],
 		options: Partial<SetOptions> = {}
@@ -189,7 +217,7 @@ export class AdapterMemory extends AdapterAbstract {
 		return results;
 	}
 
-	/** Will get multiple keys in one batch */
+	/** @inheritdoc */
 	override async getMultiple(keys: string[]): Promise<Record<string, any>> {
 		this._assertInitialized();
 		const result: Record<string, any> = {};
@@ -201,7 +229,7 @@ export class AdapterMemory extends AdapterAbstract {
 		return result;
 	}
 
-	/** Will set the expiration ttl on the given key to given ttl value */
+	/** @inheritdoc */
 	override expire(key: string, ttl: number): Promise<boolean> {
 		this._assertInitialized();
 		key = this._withNs(key);
@@ -214,7 +242,7 @@ export class AdapterMemory extends AdapterAbstract {
 		return Promise.resolve(true);
 	}
 
-	/** Will get the expiration Date for given key */
+	/** @inheritdoc */
 	override ttl(key: string): Promise<Date | null | false> {
 		this._assertInitialized();
 		key = this._withNs(key);
@@ -234,7 +262,7 @@ export class AdapterMemory extends AdapterAbstract {
 		// return Promise.resolve(new Date(Date.now() + Math.ceil(remaining)));
 	}
 
-	/**  */
+	/** @inheritdoc */
 	override async transaction(operations: Operation[]): Promise<any[]> {
 		this._assertInitialized();
 		// note: memory operations are atomic by nature

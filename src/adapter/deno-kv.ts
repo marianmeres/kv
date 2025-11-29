@@ -6,11 +6,39 @@ import {
 	type AdapterAbstractOptions,
 } from "./abstract.ts";
 
+/**
+ * Configuration options for the Deno KV adapter.
+ */
 export interface AdapterDenoKvOptions extends AdapterAbstractOptions {
-	// https://docs.deno.com/deploy/kv/#testing
-	db: any; // Deno.Kv;
+	/**
+	 * Deno.Kv instance obtained via `Deno.openKv()`.
+	 * @see https://docs.deno.com/deploy/kv/#testing
+	 */
+	db: any; // Deno.Kv - using any to avoid type issues in Node.js environments
 }
 
+/**
+ * Deno KV key-value storage adapter.
+ *
+ * Provides persistent key-value storage using Deno's built-in KV store.
+ * Only available when running in the Deno runtime.
+ *
+ * @remarks
+ * - Only works in Deno runtime (will throw error in Node.js)
+ * - `delete()` always returns `true` (Deno.Kv limitation)
+ * - `expire()` is not supported - always returns `false`
+ * - `ttl()` is not supported - always returns `null`
+ * - TTL can be set during `set()` but cannot be queried afterward
+ * - Uses `getMany()` for efficient batch reads
+ *
+ * @example
+ * ```typescript
+ * const kv = await Deno.openKv();
+ * const client = createKVClient("myapp:", "deno-kv", { db: kv });
+ * await client.initialize();
+ * await client.set("user:123", { name: "John" }, { ttl: 3600 });
+ * ```
+ */
 export class AdapterDenoKv extends AdapterAbstract {
 	override _type = "deno-kv";
 
@@ -32,14 +60,14 @@ export class AdapterDenoKv extends AdapterAbstract {
 		}
 	}
 
-	/** Will initialize the client instance */
-	initialize(): Promise<void> {
+	/** @inheritdoc */
+	override initialize(): Promise<void> {
 		this._initialized = true;
 		return Promise.resolve();
 	}
 
-	/** Will destroy (do cleanups) on the instance */
-	destroy(_hard?: boolean): Promise<void> {
+	/** @inheritdoc */
+	override destroy(_hard?: boolean): Promise<void> {
 		this._initialized = false;
 		return Promise.resolve();
 	}
@@ -53,7 +81,7 @@ export class AdapterDenoKv extends AdapterAbstract {
 		return out;
 	}
 
-	/** Will set key-value pair to the underlying store with given options */
+	/** @inheritdoc */
 	override async set(
 		key: string,
 		value: any,
@@ -84,7 +112,7 @@ export class AdapterDenoKv extends AdapterAbstract {
 		}
 	}
 
-	/** Will get the key from the underlying store */
+	/** @inheritdoc */
 	override async get(key: string): Promise<any> {
 		this._assertInitialized();
 		const { db } = this.options;
@@ -92,13 +120,13 @@ export class AdapterDenoKv extends AdapterAbstract {
 		return this.#parseValue(row);
 	}
 
-	/** Will check if the key exists in the underlying store */
+	/** @inheritdoc */
 	override async exists(key: string): Promise<boolean> {
 		this._assertInitialized();
 		return null !== (await this.get(key));
 	}
 
-	/** Will delete the key from the underlying store */
+	/** @inheritdoc */
 	override async delete(key: string): Promise<boolean> {
 		this._assertInitialized();
 		const { db } = this.options;
@@ -106,8 +134,7 @@ export class AdapterDenoKv extends AdapterAbstract {
 		return Promise.resolve(true); // always true
 	}
 
-	/** Will list all existing keys in the underlying store matching given pattern.
-	 * Recognizes redis-like star wildcard format. */
+	/** @inheritdoc */
 	override async keys(pattern: string): Promise<string[]> {
 		this._assertInitialized();
 		const { db } = this.options;
@@ -133,7 +160,7 @@ export class AdapterDenoKv extends AdapterAbstract {
 		return out;
 	}
 
-	/** Will clear all existing keys in the underlying store matching given pattern */
+	/** @inheritdoc */
 	override async clear(pattern: string): Promise<number> {
 		this._assertInitialized();
 		const keysToDelete = await this.keys(pattern);
@@ -147,7 +174,7 @@ export class AdapterDenoKv extends AdapterAbstract {
 		return deleteCount;
 	}
 
-	/** Will set multiple kv pairs in one batch */
+	/** @inheritdoc */
 	override async setMultiple(
 		keyValuePairs: [string, any][],
 		options: Partial<SetOptions> = {}
@@ -163,7 +190,7 @@ export class AdapterDenoKv extends AdapterAbstract {
 		return results;
 	}
 
-	/** Will get multiple keys in one batch. */
+	/** @inheritdoc */
 	override async getMultiple(keys: string[]): Promise<Record<string, any>> {
 		this._assertInitialized();
 		const { db } = this.options;
@@ -179,15 +206,13 @@ export class AdapterDenoKv extends AdapterAbstract {
 		return result;
 	}
 
-	/**  */
+	/** @inheritdoc */
 	override async transaction(operations: Operation[]): Promise<any[]> {
 		this._assertInitialized();
-		const { db } = this.options;
 
-		// note: memory operations are atomic by nature
+		// Note: This implementation does not use Deno.Kv's atomic feature
+		// Operations are executed sequentially
 		const results = [];
-
-		// ignoring Deno.Kv's atomic feature...
 
 		try {
 			for (const op of operations) {
@@ -211,13 +236,19 @@ export class AdapterDenoKv extends AdapterAbstract {
 		return results;
 	}
 
-	/** Not supported in Deno.Kv */
+	/**
+	 * Not supported in Deno.Kv - always returns `false`.
+	 * @inheritdoc
+	 */
 	override expire(key: string, ttl: number): Promise<boolean> {
 		this._assertInitialized();
 		return Promise.resolve(false);
 	}
 
-	/** Not supported in Deno.Kv */
+	/**
+	 * Not supported in Deno.Kv - always returns `null`.
+	 * @inheritdoc
+	 */
 	override ttl(key: string): Promise<Date | null | false> {
 		this._assertInitialized();
 		return Promise.resolve(null);

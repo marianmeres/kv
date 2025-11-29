@@ -7,12 +7,47 @@ import {
 } from "./abstract.ts";
 import { createLogger } from "@marianmeres/clog";
 
+/**
+ * Configuration options for the Redis KV adapter.
+ */
 export interface AdapterRedisOptions extends AdapterAbstractOptions {
-	// pool support is experimental, and was not tested
+	/**
+	 * Redis client instance created via `createClient()` or `createClientPool()`.
+	 * Pool support is experimental and not fully tested.
+	 */
 	db: ReturnType<typeof createClient> | ReturnType<typeof createClientPool>;
+	/**
+	 * Set to `true` if connecting to a Redis Cluster.
+	 * Note: `keys()` and `clear()` operations are not supported in cluster mode.
+	 */
 	isCluster: boolean;
 }
 
+/**
+ * Redis key-value storage adapter.
+ *
+ * Provides persistent key-value storage using Redis as the backend.
+ * Supports all Redis features including TTL, pipelining, and transactions.
+ *
+ * @remarks
+ * - Namespace is required (cannot be empty)
+ * - Uses Redis MULTI for transactions (atomic operations)
+ * - Uses pipelining for batch operations (setMultiple)
+ * - `keys()` and `clear()` are not supported in cluster mode
+ *
+ * @example
+ * ```typescript
+ * import { createClient } from 'redis';
+ *
+ * const redisClient = createClient({ url: 'redis://localhost:6379' });
+ * const client = createKVClient("myapp:", "redis", {
+ *   db: redisClient,
+ *   defaultTtl: 3600,
+ * });
+ * await client.initialize();
+ * await client.set("session:abc", { userId: 123 });
+ * ```
+ */
 export class AdapterRedis extends AdapterAbstract {
 	override _type = "redis";
 
@@ -38,7 +73,8 @@ export class AdapterRedis extends AdapterAbstract {
 		}
 	}
 
-	async initialize(): Promise<void> {
+	/** @inheritdoc */
+	override async initialize(): Promise<void> {
 		const { db, logger } = this.options;
 
 		db.on("error", (err) => logger?.error?.(err));
@@ -49,12 +85,13 @@ export class AdapterRedis extends AdapterAbstract {
 		this._initialized = true;
 	}
 
-	destroy(_hard?: boolean): Promise<void> {
+	/** @inheritdoc */
+	override destroy(_hard?: boolean): Promise<void> {
 		this._initialized = false;
 		return Promise.resolve();
 	}
 
-	/** Will set key-value pair to the underlying store with given options */
+	/** @inheritdoc */
 	override async set(
 		key: string,
 		value: any,
@@ -74,7 +111,7 @@ export class AdapterRedis extends AdapterAbstract {
 		return r === "OK";
 	}
 
-	/** Will get the key from the underlying store */
+	/** @inheritdoc */
 	override async get(key: string): Promise<any> {
 		this._assertInitialized();
 		key = this._withNs(key);
@@ -91,7 +128,7 @@ export class AdapterRedis extends AdapterAbstract {
 		}
 	}
 
-	/** Will delete the key from the underlying store */
+	/** @inheritdoc */
 	override async delete(key: string): Promise<boolean> {
 		this._assertInitialized();
 		key = this._withNs(key);
@@ -99,7 +136,7 @@ export class AdapterRedis extends AdapterAbstract {
 		return parseInt((await db.del(key)) as any) > 0;
 	}
 
-	/** Will check if the key exists in the underlying store */
+	/** @inheritdoc */
 	override async exists(key: string): Promise<boolean> {
 		this._assertInitialized();
 		key = this._withNs(key);
@@ -107,8 +144,7 @@ export class AdapterRedis extends AdapterAbstract {
 		return (await db.exists(key)) === 1;
 	}
 
-	/** Will list all existing keys in the underlying store matching given pattern.
-	 * Recognizes redis-like star wildcard format. */
+	/** @inheritdoc */
 	override async keys(pattern: string): Promise<string[]> {
 		this._assertInitialized();
 		const { db, isCluster } = this.options;
@@ -128,7 +164,7 @@ export class AdapterRedis extends AdapterAbstract {
 			.toSorted();
 	}
 
-	/** Will clear all existing keys in the underlying store matching given pattern */
+	/** @inheritdoc */
 	override async clear(pattern: string): Promise<number> {
 		this._assertInitialized();
 		const { db, isCluster } = this.options;
@@ -146,7 +182,7 @@ export class AdapterRedis extends AdapterAbstract {
 		return parseInt((await db.del(keys.map((k) => this._withNs(k)))) as any);
 	}
 
-	/** Will set multiple kv pairs in one batch */
+	/** @inheritdoc */
 	override async setMultiple(
 		keyValuePairs: [string, any][],
 		options: Partial<SetOptions> = {}
@@ -167,7 +203,7 @@ export class AdapterRedis extends AdapterAbstract {
 		return res.map((v: any) => v === "OK");
 	}
 
-	/** Will get multiple keys in one batch */
+	/** @inheritdoc */
 	override async getMultiple(keys: string[]): Promise<Record<string, any>> {
 		this._assertInitialized();
 		const { db } = this.options;
@@ -193,14 +229,14 @@ export class AdapterRedis extends AdapterAbstract {
 		return result;
 	}
 
-	/** Will set the expiration ttl on the given key to given ttl value */
+	/** @inheritdoc */
 	override async expire(key: string, ttl: number): Promise<boolean> {
 		this._assertInitialized();
 		key = this._withNs(key);
 		return parseInt((await this.options.db.expire(key, ttl)) as any) > 0;
 	}
 
-	/** Will get the expiration Date for given key */
+	/** @inheritdoc */
 	override async ttl(key: string): Promise<Date | null | false> {
 		this._assertInitialized();
 		key = this._withNs(key);
@@ -216,7 +252,7 @@ export class AdapterRedis extends AdapterAbstract {
 		return new Date(Date.now() + parseInt(`${ttl}`) * 1_000);
 	}
 
-	/**  */
+	/** @inheritdoc */
 	override async transaction(operations: Operation[]): Promise<any[]> {
 		this._assertInitialized();
 		const { db } = this.options;
