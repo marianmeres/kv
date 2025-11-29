@@ -1,4 +1,4 @@
-import { createLogger } from "@marianmeres/clog";
+import { createClog } from "@marianmeres/clog";
 import {
 	AdapterAbstract,
 	type Operation,
@@ -45,7 +45,7 @@ export class AdapterDenoKv extends AdapterAbstract {
 	override readonly options: AdapterDenoKvOptions = {
 		defaultTtl: 0, // no ttl by default
 		db: null as any,
-		logger: createLogger("KV/deno-kv"),
+		logger: createClog("KV/deno-kv"),
 	};
 
 	constructor(

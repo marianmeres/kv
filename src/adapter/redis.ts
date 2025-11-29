@@ -5,7 +5,7 @@ import {
 	type Operation,
 	type SetOptions,
 } from "./abstract.ts";
-import { createLogger } from "@marianmeres/clog";
+import { createClog } from "@marianmeres/clog";
 
 /**
  * Configuration options for the Redis KV adapter.
@@ -53,7 +53,7 @@ export class AdapterRedis extends AdapterAbstract {
 
 	override readonly options: AdapterRedisOptions = {
 		defaultTtl: 0, // no ttl by default
-		logger: createLogger("KV/redis"),
+		logger: createClog("KV/redis"),
 		db: null as any,
 		isCluster: false,
 	};

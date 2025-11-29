@@ -4,7 +4,7 @@ import {
 	type SetOptions,
 	type AdapterAbstractOptions,
 } from "./abstract.ts";
-import { createLogger } from "@marianmeres/clog";
+import { createClog } from "@marianmeres/clog";
 import type pg from "pg";
 
 /**
@@ -58,7 +58,7 @@ export class AdapterPostgres extends AdapterAbstract {
 
 	override readonly options: AdapterPostgresOptions = {
 		defaultTtl: 0, // no ttl by default
-		logger: createLogger("KV/postgres"),
+		logger: createClog("KV/postgres"),
 		db: null as any,
 		tableName: "__kv",
 		ttlCleanupIntervalSec: 0,

@@ -1,4 +1,4 @@
-import { createLogger } from "@marianmeres/clog";
+import { createClog } from "@marianmeres/clog";
 import {
 	AdapterAbstract,
 	type AdapterAbstractOptions,
@@ -46,7 +46,7 @@ export class AdapterMemory extends AdapterAbstract {
 	override readonly options: AdapterMemoryOptions = {
 		defaultTtl: 0, // no ttl by default
 		ttlCleanupIntervalSec: 0,
-		logger: createLogger("KV/memory"),
+		logger: createClog("KV/memory"),
 	};
 
 	#store = new Map<string, any>();
