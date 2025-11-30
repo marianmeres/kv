@@ -1,5 +1,8 @@
 # @marianmeres/kv
 
+[![NPM version](https://img.shields.io/npm/v/@marianmeres/kv.svg)](https://www.npmjs.com/package/@marianmeres/kv)
+[![JSR version](https://jsr.io/badges/@marianmeres/kv)](https://jsr.io/@marianmeres/kv)
+
 Key-value storage abstraction layer with support of multiple backend adapters:
 - redis 
 - postgresql
