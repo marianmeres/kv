@@ -76,3 +76,10 @@ client.ttl(key: string): Promise<Date | null | false>
 ### Memory
 - Data is not persisted (in-memory only)
 - Supports optional TTL cleanup via `ttlCleanupIntervalSec` option
+
+## Package Identity
+
+- **Name:** @marianmeres/kv
+- **Author:** Marian Meres
+- **Repository:** https://github.com/marianmeres/kv
+- **License:** MIT

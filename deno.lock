@@ -1,7 +1,7 @@
 {
   "version": "5",
   "specifiers": {
-    "jsr:@marianmeres/clog@3": "3.0.0",
+    "jsr:@marianmeres/clog@^3.2.2": "3.2.2",
     "jsr:@std/assert@^1.0.16": "1.0.16",
     "jsr:@std/fs@^1.0.20": "1.0.20",
     "jsr:@std/internal@^1.0.12": "1.0.12",
@@ -12,8 +12,8 @@
     "npm:redis@^5.10.0": "5.10.0_@redis+client@5.10.0"
   },
   "jsr": {
-    "@marianmeres/clog@3.0.0": {
-      "integrity": "c7fdcce6a078c2ec31640cf16edb854478d8f68f56cd44e7c8de4aa505c087ae"
+    "@marianmeres/clog@3.2.2": {
+      "integrity": "95a8859d33a5267f3d51fe54977758b7d112a9cc90c2d3e3602804f7db95ffa4"
     },
     "@std/assert@1.0.16": {
       "integrity": "6a7272ed1eaa77defe76e5ff63ca705d9c495077e2d5fd0126d2b53fc5bd6532",
@@ -170,7 +170,7 @@
   },
   "workspace": {
     "dependencies": [
-      "jsr:@marianmeres/clog@3",
+      "jsr:@marianmeres/clog@^3.2.2",
       "jsr:@std/assert@^1.0.16",
       "jsr:@std/fs@^1.0.20",
       "jsr:@std/path@^1.1.3",
