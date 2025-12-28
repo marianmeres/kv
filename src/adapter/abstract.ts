@@ -1,3 +1,9 @@
+/**
+ * @module
+ *
+ * Abstract base class and shared types for all KV adapters.
+ */
+
 import type { Logger } from "@marianmeres/clog";
 
 /**

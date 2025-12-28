@@ -1,3 +1,9 @@
+/**
+ * @module
+ *
+ * In-memory key-value storage adapter implementation.
+ */
+
 import { createClog } from "@marianmeres/clog";
 import {
 	AdapterAbstract,

@@ -1,3 +1,9 @@
+/**
+ * @module
+ *
+ * PostgreSQL key-value storage adapter implementation.
+ */
+
 import {
 	AdapterAbstract,
 	type Operation,

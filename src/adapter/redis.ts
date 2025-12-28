@@ -1,3 +1,9 @@
+/**
+ * @module
+ *
+ * Redis key-value storage adapter implementation.
+ */
+
 import type { createClient, createClientPool } from "redis";
 import {
 	AdapterAbstract,

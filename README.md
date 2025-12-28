@@ -2,8 +2,9 @@
 
 [![NPM version](https://img.shields.io/npm/v/@marianmeres/kv.svg)](https://www.npmjs.com/package/@marianmeres/kv)
 [![JSR version](https://jsr.io/badges/@marianmeres/kv)](https://jsr.io/@marianmeres/kv)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Key-value storage abstraction layer with support of multiple backend adapters:
+Key-value storage abstraction layer with support for multiple backend adapters:
 - redis 
 - postgresql
 - memory
@@ -80,9 +81,6 @@ client.ttl(key: string): Promise<Date | null | false>
 - Data is not persisted (in-memory only)
 - Supports optional TTL cleanup via `ttlCleanupIntervalSec` option
 
-## Package Identity
+## Full API Reference
 
-- **Name:** @marianmeres/kv
-- **Author:** Marian Meres
-- **Repository:** https://github.com/marianmeres/kv
-- **License:** MIT
+For complete API documentation including all methods, types, and adapter-specific options, see [API.md](API.md).

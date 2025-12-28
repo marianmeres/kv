@@ -1,6 +1,12 @@
 // deno-lint-ignore-file no-explicit-any
 
 /**
+ * @module
+ *
+ * Utility functions for the KV package.
+ */
+
+/**
  * Delays execution for `timeout` milliseconds.
  *
  * @example

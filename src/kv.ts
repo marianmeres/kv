@@ -1,3 +1,12 @@
+/**
+ * @module
+ *
+ * Factory module for creating KV client instances.
+ *
+ * Exports the main {@link createKVClient} factory function and re-exports
+ * all adapter classes, types, and interfaces.
+ */
+
 import { AdapterDenoKv, type AdapterDenoKvOptions } from "./adapter/deno-kv.ts";
 import { AdapterMemory, type AdapterMemoryOptions } from "./adapter/memory.ts";
 import {
@@ -5,6 +14,15 @@ import {
 	type AdapterPostgresOptions,
 } from "./adapter/postgres.ts";
 import { AdapterRedis, type AdapterRedisOptions } from "./adapter/redis.ts";
+
+// Re-export all types for consumers
+export type { SetOptions, AdapterInfo, AdapterAbstractOptions, Operation } from "./adapter/abstract.ts";
+export { AdapterAbstract } from "./adapter/abstract.ts";
+export { AdapterMemory, type AdapterMemoryOptions } from "./adapter/memory.ts";
+export { AdapterRedis, type AdapterRedisOptions } from "./adapter/redis.ts";
+export { AdapterPostgres, type AdapterPostgresOptions } from "./adapter/postgres.ts";
+export { AdapterDenoKv, type AdapterDenoKvOptions } from "./adapter/deno-kv.ts";
+export { sleep } from "./utils/sleep.ts";
 
 /**
  * Type mapping for all supported KV adapter types.
