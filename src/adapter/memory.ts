@@ -55,9 +55,9 @@ export class AdapterMemory extends AdapterAbstract {
 		logger: createClog("KV/memory"),
 	};
 
-	#store = new Map<string, any>();
+	#store = new Map<string, string>();
 	#expirations = new Map<string, Date>();
-	#cleanupTimer: any;
+	#cleanupTimer: ReturnType<typeof setTimeout> | undefined;
 
 	constructor(
 		public override readonly namespace: string = "",
@@ -297,10 +297,10 @@ export class AdapterMemory extends AdapterAbstract {
 	}
 
 	override async __debug_dump(): Promise<
-		Record<string, { value: any; ttl: Date | null | false }>
+		Record<string, { value: unknown; ttl: Date | null | false }>
 	> {
 		this._assertInitialized();
-		const out: Record<string, { value: any; ttl: Date | null | false }> = {};
+		const out: Record<string, { value: unknown; ttl: Date | null | false }> = {};
 		for (let k of this.#store.keys()) {
 			// need to strip the namespace from the key
 			if (this.namespace) k = k.slice(this.namespace.length);

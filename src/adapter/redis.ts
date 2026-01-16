@@ -60,7 +60,7 @@ export class AdapterRedis extends AdapterAbstract {
 	override readonly options: AdapterRedisOptions = {
 		defaultTtl: 0, // no ttl by default
 		logger: createClog("KV/redis"),
-		db: null as any,
+		db: null!, // will be set in constructor via options merge
 		isCluster: false,
 	};
 
@@ -139,7 +139,7 @@ export class AdapterRedis extends AdapterAbstract {
 		this._assertInitialized();
 		key = this._withNs(key);
 		const { db } = this.options;
-		return parseInt((await db.del(key)) as any) > 0;
+		return Number(await db.del(key)) > 0;
 	}
 
 	/** @inheritdoc */
@@ -156,10 +156,22 @@ export class AdapterRedis extends AdapterAbstract {
 		const { db, isCluster } = this.options;
 
 		if (isCluster) {
-			throw new Error("KEYS command not supported in Redis Cluster mode");
+			throw new Error("keys() is not supported in Redis Cluster mode");
 		}
 
-		const keys: string[] = (await db.keys(this.namespace + pattern)) as any;
+		// Use SCAN instead of KEYS for non-blocking iteration
+		const fullPattern = this.namespace + pattern;
+		const keys: string[] = [];
+		let cursor = "0";
+
+		do {
+			const result = await db.scan(cursor, {
+				MATCH: fullPattern,
+				COUNT: 100,
+			});
+			cursor = `${result.cursor}`;
+			keys.push(...result.keys);
+		} while (cursor !== "0");
 
 		return keys
 			.map((k) => {
@@ -185,7 +197,8 @@ export class AdapterRedis extends AdapterAbstract {
 
 		if (keys.length === 0) return 0;
 
-		return parseInt((await db.del(keys.map((k) => this._withNs(k)))) as any);
+		// Use UNLINK instead of DEL for non-blocking memory reclamation
+		return Number(await db.unlink(keys.map((k) => this._withNs(k))));
 	}
 
 	/** @inheritdoc */
@@ -206,7 +219,7 @@ export class AdapterRedis extends AdapterAbstract {
 
 		const res = await pipeline.exec();
 
-		return res.map((v: any) => v === "OK");
+		return res.map((v) => String(v) === "OK");
 	}
 
 	/** @inheritdoc */
@@ -239,7 +252,7 @@ export class AdapterRedis extends AdapterAbstract {
 	override async expire(key: string, ttl: number): Promise<boolean> {
 		this._assertInitialized();
 		key = this._withNs(key);
-		return parseInt((await this.options.db.expire(key, ttl)) as any) > 0;
+		return Number(await this.options.db.expire(key, ttl)) > 0;
 	}
 
 	/** @inheritdoc */
@@ -280,23 +293,23 @@ export class AdapterRedis extends AdapterAbstract {
 			}
 		}
 
-		const res: any = await multi.exec();
+		const res = await multi.exec() as unknown[];
 
 		// fix results types
 		for (const [i, op] of operations.entries()) {
 			switch (op.type) {
 				case "set":
-					res[i] = res[i] === "OK";
+					res[i] = String(res[i]) === "OK";
 					break;
 				case "get":
 					try {
-						res[i] = JSON.parse(res[i]);
+						res[i] = JSON.parse(String(res[i]));
 					} catch (_e) {
 						/**/
 					}
 					break;
 				case "delete":
-					res[i] = res[i] > 0;
+					res[i] = Number(res[i]) > 0;
 					break;
 			}
 		}
@@ -312,9 +325,9 @@ export class AdapterRedis extends AdapterAbstract {
 		this._assertInitialized();
 		const { db } = this.options;
 
-		const keys: string[] = ((await db.keys("*")) as any).toSorted();
+		const keys = (await db.keys("*")).toSorted();
 
-		const out = {} as any;
+		const out: Record<string, { value: unknown; ttl: Date | null | false }> = {};
 
 		for (const _key of keys) {
 			const key = this._withoutNs(_key);

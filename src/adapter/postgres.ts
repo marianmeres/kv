@@ -65,12 +65,12 @@ export class AdapterPostgres extends AdapterAbstract {
 	override readonly options: AdapterPostgresOptions = {
 		defaultTtl: 0, // no ttl by default
 		logger: createClog("KV/postgres"),
-		db: null as any,
+		db: null!, // will be set in constructor via options merge
 		tableName: "__kv",
 		ttlCleanupIntervalSec: 0,
 	};
 
-	#cleanupTimer: any;
+	#cleanupTimer: ReturnType<typeof setTimeout> | undefined;
 
 	constructor(
 		public override readonly namespace: string = "",
@@ -105,6 +105,12 @@ export class AdapterPostgres extends AdapterAbstract {
             CREATE INDEX IF NOT EXISTS idx_${safe(tableName)}_expires_at
                 ON ${tableName} (expires_at)
                 WHERE expires_at IS NOT NULL
+        `);
+
+		// Index for efficient prefix lookups with LIKE 'prefix%' queries
+		await db.query(`
+            CREATE INDEX IF NOT EXISTS idx_${safe(tableName)}_key_prefix
+                ON ${tableName} (key text_pattern_ops)
         `);
 
 		this._initialized = true;
@@ -257,17 +263,28 @@ export class AdapterPostgres extends AdapterAbstract {
 		this._assertInitialized();
 
 		const { db, tableName } = this.options;
-		let params: string[] = [];
+		const likePattern =
+			pattern === "*"
+				? this.namespace + "%"
+				: this.namespace + this.#likePattern(pattern);
 
-		const query = `DELETE FROM ${tableName} WHERE key LIKE $1`;
-		if (pattern === "*") {
-			params = [this.namespace + "%"];
-		} else {
-			params = [this.namespace + this.#likePattern(pattern)];
-		}
+		// Batch large deletions to prevent long-running transactions
+		const batchSize = 10000;
+		let totalDeleted = 0;
+		let deleted: number;
 
-		const { rowCount } = await db.query(query, params);
-		return rowCount!;
+		do {
+			const { rowCount } = await db.query(
+				`DELETE FROM ${tableName} WHERE key IN (
+					SELECT key FROM ${tableName} WHERE key LIKE $1 LIMIT $2
+				)`,
+				[likePattern, batchSize]
+			);
+			deleted = rowCount ?? 0;
+			totalDeleted += deleted;
+		} while (deleted === batchSize);
+
+		return totalDeleted;
 	}
 
 	/** @inheritdoc */
@@ -285,9 +302,9 @@ export class AdapterPostgres extends AdapterAbstract {
 			.map(([_k, _v], i) => `($${i * 3 + 1}, $${i * 3 + 2}, $${i * 3 + 3})`)
 			.join(", ");
 
-		const params = keyValuePairs.reduce(
+		const params = keyValuePairs.reduce<(string | Date | null)[]>(
 			(m, [k, v]) => [...m, this._withNs(k), JSON.stringify(v), expiresAt],
-			[] as any
+			[]
 		);
 
 		// a.k.a UPSERT
@@ -425,12 +442,15 @@ export class AdapterPostgres extends AdapterAbstract {
 
 		// console.log(12312, rows);
 
-		return rows.reduce((m, row) => {
-			m[this._withoutNs(row.key)] = {
-				value: row.value,
-				ttl: row.expires_at,
-			};
-			return m;
-		}, {} as any);
+		return rows.reduce<Record<string, { value: unknown; ttl: Date | null | false }>>(
+			(m, row) => {
+				m[this._withoutNs(row.key)] = {
+					value: row.value,
+					ttl: row.expires_at,
+				};
+				return m;
+			},
+			{}
+		);
 	}
 }

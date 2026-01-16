@@ -85,7 +85,7 @@ interface KnownTypes {
  */
 export function createKVClient<T extends keyof KnownTypes>(
 	namespace: string = "",
-	type: T = "memory" as any,
+	type: T = "memory" as T,
 	options: Partial<KnownTypes[T]["options"]> = {}
 ): KnownTypes[T]["adapter"] {
 	//
