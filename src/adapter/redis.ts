@@ -170,7 +170,7 @@ export class AdapterRedis extends AdapterAbstract {
 				COUNT: 100,
 			});
 			cursor = `${result.cursor}`;
-			keys.push(...result.keys);
+			keys.push(...result.keys.map((k) => String(k)));
 		} while (cursor !== "0");
 
 		return keys
@@ -330,7 +330,7 @@ export class AdapterRedis extends AdapterAbstract {
 		const out: Record<string, { value: unknown; ttl: Date | null | false }> = {};
 
 		for (const _key of keys) {
-			const key = this._withoutNs(_key);
+			const key = this._withoutNs(String(_key));
 			out[key] = {
 				value: await this.get(key),
 				ttl: await this.ttl(key),
