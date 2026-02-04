@@ -2,18 +2,19 @@
   "version": "5",
   "specifiers": {
     "jsr:@marianmeres/batch@^1.1.0": "1.1.0",
-    "jsr:@marianmeres/clog@^3.10.0": "3.15.0",
-    "jsr:@marianmeres/clog@^3.15.0": "3.15.0",
+    "jsr:@marianmeres/clog@^3.10.0": "3.15.2",
+    "jsr:@marianmeres/clog@^3.15.2": "3.15.2",
     "jsr:@marianmeres/npmbuild@^1.10.0": "1.10.0",
-    "jsr:@marianmeres/pubsub@^2.4.4": "2.4.5",
-    "jsr:@std/assert@^1.0.16": "1.0.16",
-    "jsr:@std/collections@^1.1.3": "1.1.3",
-    "jsr:@std/fs@^1.0.21": "1.0.21",
+    "jsr:@marianmeres/pubsub@^2.4.4": "2.4.6",
+    "jsr:@std/assert@^1.0.18": "1.0.18",
+    "jsr:@std/collections@^1.1.3": "1.1.5",
+    "jsr:@std/fs@^1.0.21": "1.0.22",
+    "jsr:@std/fs@^1.0.22": "1.0.22",
     "jsr:@std/internal@^1.0.12": "1.0.12",
     "jsr:@std/path@^1.1.4": "1.1.4",
     "npm:@types/node@*": "24.2.0",
     "npm:@types/pg@^8.16.0": "8.16.0",
-    "npm:pg@^8.17.1": "8.17.1",
+    "npm:pg@^8.18.0": "8.18.0",
     "npm:redis@^5.10.0": "5.10.0_@redis+client@5.10.0"
   },
   "jsr": {
@@ -24,8 +25,8 @@
         "jsr:@marianmeres/pubsub"
       ]
     },
-    "@marianmeres/clog@3.15.0": {
-      "integrity": "0eb9aa14f23885489ac74dd1260065a4f638e2db22392ae6f2af12b1b2ea097e",
+    "@marianmeres/clog@3.15.2": {
+      "integrity": "c9f35639efed3aacf28d7f1a0c3b0cfb23420a6ece0e830742e56c3e87c48562",
       "dependencies": [
         "jsr:@marianmeres/batch"
       ]
@@ -34,24 +35,24 @@
       "integrity": "eb45240930dbdf7b870af50a99496adf2e98683e25d57c4a0864387760e05e69",
       "dependencies": [
         "jsr:@std/collections",
-        "jsr:@std/fs",
+        "jsr:@std/fs@^1.0.21",
         "jsr:@std/path"
       ]
     },
-    "@marianmeres/pubsub@2.4.5": {
-      "integrity": "9050392e5bcbf5fb0210e2c61fcfa7bb23c9e7ca3d9c43f5d16033f53ba0d130"
+    "@marianmeres/pubsub@2.4.6": {
+      "integrity": "949fc1f5e39a84642f5943dccb94fe14c58bfffa48649e8401f3d0607a7f2159"
     },
-    "@std/assert@1.0.16": {
-      "integrity": "6a7272ed1eaa77defe76e5ff63ca705d9c495077e2d5fd0126d2b53fc5bd6532",
+    "@std/assert@1.0.18": {
+      "integrity": "270245e9c2c13b446286de475131dc688ca9abcd94fc5db41d43a219b34d1c78",
       "dependencies": [
         "jsr:@std/internal"
       ]
     },
-    "@std/collections@1.1.3": {
-      "integrity": "bf8b0818886df6a32b64c7d3b037a425111f28278d69fd0995aeb62777c986b0"
+    "@std/collections@1.1.5": {
+      "integrity": "c37cc6bbbbf90fec3e782535a46c9c8a3210f19118c61add71fcea86b0ffd491"
     },
-    "@std/fs@1.0.21": {
-      "integrity": "d720fe1056d78d43065a4d6e0eeb2b19f34adb8a0bc7caf3a4dbf1d4178252cd",
+    "@std/fs@1.0.22": {
+      "integrity": "de0f277a58a867147a8a01bc1b181d0dfa80bfddba8c9cf2bacd6747bcec9308",
       "dependencies": [
         "jsr:@std/internal",
         "jsr:@std/path"
@@ -108,7 +109,7 @@
       "integrity": "sha512-RmhMd/wD+CF8Dfo+cVIy3RR5cl8CyfXQ0tGgW6XBL8L4LM/UTEbNXYRbLwU6w+CgrKBNbrQWt4FUtTfaU5jSYQ==",
       "dependencies": [
         "@types/node",
-        "pg-protocol@1.10.3",
+        "pg-protocol",
         "pg-types"
       ]
     },
@@ -118,20 +119,17 @@
     "pg-cloudflare@1.3.0": {
       "integrity": "sha512-6lswVVSztmHiRtD6I8hw4qP/nDm1EJbKMRhf3HCYaqud7frGysPv7FYJ5noZQdhQtN2xJnimfMtvQq21pdbzyQ=="
     },
-    "pg-connection-string@2.10.0": {
-      "integrity": "sha512-ur/eoPKzDx2IjPaYyXS6Y8NSblxM7X64deV2ObV57vhjsWiwLvUD6meukAzogiOsu60GO8m/3Cb6FdJsWNjwXg=="
+    "pg-connection-string@2.11.0": {
+      "integrity": "sha512-kecgoJwhOpxYU21rZjULrmrBJ698U2RxXofKVzOn5UDj61BPj/qMb7diYUR1nLScCDbrztQFl1TaQZT0t1EtzQ=="
     },
     "pg-int8@1.0.1": {
       "integrity": "sha512-WCtabS6t3c8SkpDBUlb1kjOs7l66xsGdKpIPZsg4wR+B3+u9UAum2odSsF9tnvxg80h4ZxLWMy4pRjOsFIqQpw=="
     },
-    "pg-pool@3.11.0_pg@8.17.1": {
+    "pg-pool@3.11.0_pg@8.18.0": {
       "integrity": "sha512-MJYfvHwtGp870aeusDh+hg9apvOe2zmpZJpyt+BMtzUWlVqbhFmMK6bOBXLBUPd7iRtIF9fZplDc7KrPN3PN7w==",
       "dependencies": [
         "pg"
       ]
-    },
-    "pg-protocol@1.10.3": {
-      "integrity": "sha512-6DIBgBQaTKDJyxnXaLiLR8wBpQQcGWuAESkRBX/t6OwA8YsqP+iVSiond2EDy6Y/dsGk8rh/jtax3js5NeV7JQ=="
     },
     "pg-protocol@1.11.0": {
       "integrity": "sha512-pfsxk2M9M3BuGgDOfuy37VNRRX3jmKgMjcvAcWqNDpZSf4cUmv8HSOl5ViRQFsfARFn0KuUQTgLxVMbNq5NW3g=="
@@ -146,12 +144,12 @@
         "postgres-interval"
       ]
     },
-    "pg@8.17.1": {
-      "integrity": "sha512-EIR+jXdYNSMOrpRp7g6WgQr7SaZNZfS7IzZIO0oTNEeibq956JxeD15t3Jk3zZH0KH8DmOIx38qJfQenoE8bXQ==",
+    "pg@8.18.0": {
+      "integrity": "sha512-xqrUDL1b9MbkydY/s+VZ6v+xiMUmOUk7SS9d/1kpyQxoJ6U9AO1oIJyUWVZojbfe5Cc/oluutcgFG4L9RDP1iQ==",
       "dependencies": [
         "pg-connection-string",
         "pg-pool",
-        "pg-protocol@1.11.0",
+        "pg-protocol",
         "pg-types",
         "pgpass"
       ],
@@ -202,13 +200,13 @@
   },
   "workspace": {
     "dependencies": [
-      "jsr:@marianmeres/clog@^3.15.0",
+      "jsr:@marianmeres/clog@^3.15.2",
       "jsr:@marianmeres/npmbuild@^1.10.0",
-      "jsr:@std/assert@^1.0.16",
-      "jsr:@std/fs@^1.0.21",
+      "jsr:@std/assert@^1.0.18",
+      "jsr:@std/fs@^1.0.22",
       "jsr:@std/path@^1.1.4",
       "npm:@types/pg@^8.16.0",
-      "npm:pg@^8.17.1",
+      "npm:pg@^8.18.0",
       "npm:redis@^5.10.0"
     ]
   }

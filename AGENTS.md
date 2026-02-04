@@ -1,18 +1,51 @@
-# @marianmeres/kv - Agent Reference
+# @marianmeres/kv — Agent Guide
 
 Machine-friendly reference for AI agents working with this codebase.
 
-## Package Identity
+## Quick Reference
 
-- **Name**: `@marianmeres/kv`
-- **Version**: 1.2.2
-- **License**: MIT
-- **Runtime**: Deno (primary), Node.js (via npm build)
-- **Language**: TypeScript
+- **Stack**: TypeScript, Deno (primary), Node.js (via npm build)
+- **Run**: `deno task test` | **Build**: `deno task npm:build`
+- **Version**: 1.3.1
 
 ## Purpose
 
 Key-value storage abstraction layer providing a unified Redis-inspired API across multiple storage backends.
+
+## Project Structure
+
+```
+src/
+├── mod.ts              — Main entry point (re-exports kv.ts)
+├── kv.ts               — Factory function and all exports
+├── adapter/
+│   ├── abstract.ts     — Base class + shared types
+│   ├── memory.ts       — In-memory adapter
+│   ├── redis.ts        — Redis adapter
+│   ├── postgres.ts     — PostgreSQL adapter
+│   └── deno-kv.ts      — Deno KV adapter
+└── utils/
+    └── sleep.ts        — Sleep utility function
+
+tests/
+├── kv.test.ts          — Main test file
+├── _tests-runner.ts    — Test harness
+├── _redis.ts           — Redis test helper
+└── _pg.ts              — PostgreSQL test helper
+```
+
+## Critical Conventions
+
+1. Namespace must end with `:` or be empty string
+2. Values are JSON-stringified internally
+3. TTL is in seconds; stored as absolute Date internally
+4. Pattern matching: Redis-style (`*` = any chars, `?` = single char)
+
+## Before Making Changes
+
+- [ ] Check existing patterns in adapter implementations
+- [ ] Run tests: `deno test --unstable-kv -A --env-file`
+- [ ] Verify adapter limitations are documented
 
 ## Supported Adapters
 
@@ -22,28 +55,6 @@ Key-value storage abstraction layer providing a unified Redis-inspired API acros
 | Redis | `"redis"` | `db` (Redis client) | Namespace required; `keys()`/`clear()` unavailable in cluster mode |
 | PostgreSQL | `"postgres"` | `db` (pg.Pool/Client) | None |
 | Deno KV | `"deno-kv"` | `db` (Deno.Kv) | Deno runtime only; `delete()` always true; `expire()`/`ttl()` not supported |
-
-## File Structure
-
-```
-src/
-├── mod.ts                    # Main entry point, re-exports kv.ts
-├── kv.ts                     # Factory function and all exports
-├── adapter/
-│   ├── abstract.ts           # Base class + shared types
-│   ├── memory.ts             # In-memory adapter
-│   ├── redis.ts              # Redis adapter
-│   ├── postgres.ts           # PostgreSQL adapter
-│   └── deno-kv.ts            # Deno KV adapter
-└── utils/
-    └── sleep.ts              # Sleep utility function
-
-tests/
-├── kv.test.ts                # Main test file
-├── _tests-runner.ts          # Test harness
-├── _redis.ts                 # Redis test helper
-└── _pg.ts                    # PostgreSQL test helper
-```
 
 ## Core API
 
@@ -92,9 +103,6 @@ deno test --unstable-kv -A --env-file --watch
 
 # Build npm package
 deno run -A scripts/build-npm.ts
-
-# Publish to npm
-deno run -A scripts/build-npm.ts && cd ./.npm-dist && npm publish --access=public
 ```
 
 ## Test Environment Variables
@@ -108,20 +116,6 @@ TEST_PG_PASSWORD=<required>
 TEST_REDIS_URL=redis://localhost:6379
 ```
 
-## Implementation Notes
-
-1. **Namespace**: Must end with `:` or be empty string
-2. **Value Serialization**: All values JSON-stringified internally
-3. **TTL**: In seconds; stored as absolute Date internally
-4. **Pattern Matching**: Redis-style (`*` = any chars, `?` = single char)
-5. **Transactions**: Atomic for Redis/PostgreSQL; sequential for memory/Deno KV
-
-## Dependencies
-
-- `@marianmeres/clog` - Logging
-- `pg` - PostgreSQL driver
-- `redis` - Redis client
-
 ## Extending
 
 To add a new adapter:
@@ -131,3 +125,8 @@ To add a new adapter:
 4. Add to `KnownTypes` in `src/kv.ts`
 5. Add case in `createKVClient` factory
 6. Export from `src/kv.ts`
+
+## Documentation Index
+
+- [API Reference](./API.md) — Complete API documentation
+- [README](./README.md) — Quick start and installation

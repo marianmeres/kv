@@ -84,3 +84,7 @@ client.ttl(key: string): Promise<Date | null | false>
 ## Full API Reference
 
 For complete API documentation including all methods, types, and adapter-specific options, see [API.md](API.md).
+
+## License
+
+[MIT](LICENSE)
