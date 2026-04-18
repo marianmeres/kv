@@ -5,6 +5,8 @@ import { createPg } from "./_pg.ts";
 import { createKVClient } from "../src/kv.ts";
 import type { AdapterMemory } from "../src/adapter/memory.ts";
 import type { AdapterPostgres } from "../src/adapter/postgres.ts";
+import type { AdapterRedis } from "../src/adapter/redis.ts";
+import type { AdapterDenoKv } from "../src/adapter/deno-kv.ts";
 import { createRedis } from "./_redis.ts";
 
 export function testsRunner(
@@ -15,6 +17,8 @@ export function testsRunner(
 			clients: {
 				memory: AdapterMemory;
 				postgres: AdapterPostgres;
+				redis: AdapterRedis;
+				"deno-kv": AdapterDenoKv;
 			};
 		}) => void | Promise<void>;
 		only?: boolean;

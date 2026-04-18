@@ -6,7 +6,7 @@ Machine-friendly reference for AI agents working with this codebase.
 
 - **Stack**: TypeScript, Deno (primary), Node.js (via npm build)
 - **Run**: `deno task test` | **Build**: `deno task npm:build`
-- **Version**: 2.0.0
+- **Version**: 2.1.0
 
 ## Purpose
 
@@ -41,9 +41,15 @@ tests/
 3. TTL is in seconds; stored as absolute `Date` internally.
 4. Pattern matching: Redis-style (`*` = any chars, `?` = single char). All other characters — including `.`, `(`, `[`, `%`, `_` — are matched **literally**.
 5. TTL resolution: `options.ttl ?? defaultTtl`; `0` or negative disables expiration for that call (explicitly overrides `defaultTtl`).
-6. All pattern-to-regex / pattern-to-LIKE conversion lives in `abstract.ts` — use `_globToRegex()` and `_resolveTtl()` helpers; do not re-implement per-adapter.
+6. All pattern-to-regex / pattern-to-LIKE conversion lives in `abstract.ts` — use `_globToRegex()`, `_resolveTtl()`, `_normalizePairs()`; do not re-implement per-adapter.
 7. Postgres `transaction()` must pin a single connection via `pool.connect()`; every nested query uses that client, not `this.options.db`.
 8. Redis adapter owns the connection iff `initialize()` opened it (`#weOpened` flag).
+9. Key validation lives in `_withNs()` — enforced when `options.validateKeys !== false`. Reject empty strings, keys with `\0`, and total `namespace + key` length > 512.
+10. `ttl()` returns `TtlResult = { state: "missing" | "no-ttl" | "expires"; at? }` — discriminated union, not `Date | null | false`.
+11. `incr`/`decr`/`getSet`/`cas`/`setIfAbsent` must be atomic: Redis = Lua or NX; Postgres = UPSERT/UPDATE with RETURNING; Deno KV = `#atomicUpdate` CAS retry loop; Memory = plain read-modify-write (single-threaded).
+12. Non-numeric `incr`/`decr` target throws `TypeError("KV value is not a number")`. In Postgres, detect via error code `22P02`.
+13. Deno KV atomic retries exhausted → throw `KvRaceError` (imported from `abstract.ts`).
+14. `keysIter` must clean up on early consumer break — PG releases its server-side cursor in the generator's `finally`.
 
 ## Before Making Changes
 
@@ -71,20 +77,35 @@ createKVClient(namespace?: string, type?: AdapterType, options?: AdapterOptions)
 ### Client Methods
 
 ```
+// lifecycle
 initialize(): Promise<void>
 destroy(hard?: boolean): Promise<void>
 info(): AdapterInfo
-set(key: string, value: any, options?: SetOptions): Promise<boolean>
-get(key: string): Promise<any>
-delete(key: string): Promise<boolean>
-exists(key: string): Promise<boolean>
-keys(pattern: string): Promise<string[]>
-clear(pattern: string): Promise<number>
-setMultiple(pairs: [string, any][], options?: SetOptions): Promise<boolean[]>
-getMultiple(keys: string[]): Promise<Record<string, any>>
+
+// single-key
+set(key, value, options?): Promise<boolean>
+setIfAbsent(key, value, options?): Promise<boolean>        // atomic
+getSet(key, value, options?): Promise<any>                 // returns previous
+incr(key, by?=1, options?): Promise<number>                // atomic
+decr(key, by?=1, options?): Promise<number>                // atomic
+cas(key, expected, next, options?): Promise<boolean>       // atomic
+get(key): Promise<any>
+delete(key): Promise<boolean>
+exists(key): Promise<boolean>
+
+// patterns
+keys(pattern): Promise<string[]>                           // sorted
+keysIter(pattern): AsyncIterable<string>                   // streaming
+clear(pattern): Promise<number>
+
+// batch
+setMultiple(entries: SetMultipleEntry[], options?): Promise<boolean[]>
+getMultiple(keys): Promise<Record<string, any>>
 transaction(operations: Operation[]): Promise<any[]>
-expire(key: string, ttl: number): Promise<boolean>
-ttl(key: string): Promise<Date | null | false>
+
+// TTL
+expire(key, ttl): Promise<boolean>
+ttl(key): Promise<TtlResult>
 ```
 
 ## Key Types
@@ -92,8 +113,19 @@ ttl(key: string): Promise<Date | null | false>
 ```typescript
 interface SetOptions { ttl: number }
 interface AdapterInfo { type: string }
-interface AdapterAbstractOptions { defaultTtl: number; logger?: Logger }
+interface AdapterAbstractOptions { defaultTtl: number; logger?: Logger; validateKeys?: boolean }
 interface Operation { type: "set" | "get" | "delete"; key: string; value?: any; options?: SetOptions }
+
+type SetMultipleEntry =
+  | [string, any]
+  | { key: string; value: any; ttl?: number };
+
+type TtlResult =
+  | { state: "missing" }
+  | { state: "no-ttl" }
+  | { state: "expires"; at: Date };
+
+class KvRaceError extends Error {}  // Deno KV CAS retry-exhaustion
 ```
 
 ## Commands

@@ -9,7 +9,9 @@ import {
 	AdapterAbstract,
 	type AdapterAbstractOptions,
 	type Operation,
+	type SetMultipleEntry,
 	type SetOptions,
+	type TtlResult,
 } from "./abstract.ts";
 import { createClog } from "@marianmeres/clog";
 
@@ -62,6 +64,7 @@ export class AdapterRedis extends AdapterAbstract {
 		logger: createClog("KV/redis"),
 		db: null!, // will be set in constructor via options merge
 		isCluster: false,
+		validateKeys: true,
 	};
 
 	constructor(
@@ -80,6 +83,7 @@ export class AdapterRedis extends AdapterAbstract {
 	}
 
 	#errorListener: ((err: unknown) => void) | undefined;
+	#listenerDb: any | undefined;
 	#weOpened = false;
 
 	/** @inheritdoc */
@@ -87,10 +91,12 @@ export class AdapterRedis extends AdapterAbstract {
 		const { db, logger } = this.options;
 
 		// avoid stacking listeners across repeated initialize() calls
-		if (this.#errorListener) {
-			db.off?.("error", this.#errorListener);
+		// (also handles a hot-swapped db instance, though not a documented path)
+		if (this.#errorListener && this.#listenerDb) {
+			this.#listenerDb.off?.("error", this.#errorListener);
 		}
 		this.#errorListener = (err) => logger?.error?.(err);
+		this.#listenerDb = db;
 		db.on("error", this.#errorListener);
 
 		// the pool instance doesn't have connect, so being defensive...
@@ -107,9 +113,10 @@ export class AdapterRedis extends AdapterAbstract {
 		this._initialized = false;
 		const { db } = this.options;
 
-		if (this.#errorListener) {
-			db.off?.("error", this.#errorListener);
+		if (this.#errorListener && this.#listenerDb) {
+			this.#listenerDb.off?.("error", this.#errorListener);
 			this.#errorListener = undefined;
+			this.#listenerDb = undefined;
 		}
 
 		// Only close a connection we opened ourselves — if the caller opened the
@@ -149,6 +156,166 @@ export class AdapterRedis extends AdapterAbstract {
 	}
 
 	/** @inheritdoc */
+	override async setIfAbsent(
+		key: string,
+		value: any,
+		options: Partial<SetOptions> = {}
+	): Promise<boolean> {
+		this._assertInitialized();
+		key = this._withNs(key);
+		const { db } = this.options;
+		const ttl = this._resolveTtl(options);
+
+		if (value === undefined) value = null;
+		const serialized = JSON.stringify(value);
+
+		const setOptions: any = { NX: true };
+		if (ttl) setOptions.EX = ttl;
+
+		const r = await db.set(key, serialized, setOptions);
+		return r === "OK";
+	}
+
+	// Lua: GET prev, SET new (optionally EX). Returns previous value (nil = missing).
+	#GET_SET_SCRIPT = `
+local prev = redis.call('GET', KEYS[1])
+if ARGV[2] == '0' then
+  redis.call('SET', KEYS[1], ARGV[1])
+else
+  redis.call('SET', KEYS[1], ARGV[1], 'EX', tonumber(ARGV[2]))
+end
+return prev
+`;
+
+	/** @inheritdoc */
+	override async getSet(
+		key: string,
+		value: any,
+		options: Partial<SetOptions> = {}
+	): Promise<any> {
+		this._assertInitialized();
+		const nsKey = this._withNs(key);
+		const { db } = this.options;
+		const ttl = this._resolveTtl(options);
+
+		if (value === undefined) value = null;
+		const serialized = JSON.stringify(value);
+
+		const prev = await (db as any).eval(this.#GET_SET_SCRIPT, {
+			keys: [nsKey],
+			arguments: [serialized, String(ttl ?? 0)],
+		});
+
+		if (prev === null || prev === undefined) return null;
+		try {
+			return JSON.parse(`${prev}`);
+		} catch {
+			return prev;
+		}
+	}
+
+	// Lua: conditional EXPIRE only when the key is newly created by INCRBY.
+	#INCR_SCRIPT = `
+local existed = redis.call('EXISTS', KEYS[1]) == 1
+if not existed then
+  redis.call('SET', KEYS[1], '0')
+end
+local v = redis.call('INCRBY', KEYS[1], ARGV[1])
+if not existed and tonumber(ARGV[2]) > 0 then
+  redis.call('EXPIRE', KEYS[1], tonumber(ARGV[2]))
+end
+return v
+`;
+
+	async #incrBy(
+		key: string,
+		delta: number,
+		options: Partial<SetOptions> = {}
+	): Promise<number> {
+		this._assertInitialized();
+		const nsKey = this._withNs(key);
+		const { db } = this.options;
+		const ttl = this._resolveTtl(options);
+
+		// Validate *before* the INCRBY: if the key holds a JSON non-number
+		// (e.g. `"foo"`), INCRBY would reject with "not an integer" anyway,
+		// but a stored JSON number like `1` is `"1"` in Redis — compatible.
+		// Booleans / objects get rejected downstream with a Redis error.
+		try {
+			const result = await (db as any).eval(this.#INCR_SCRIPT, {
+				keys: [nsKey],
+				arguments: [String(delta), String(ttl ?? 0)],
+			});
+			return Number(result);
+		} catch (err: any) {
+			const msg = `${err?.message ?? err}`;
+			if (/not an integer|is not a number/i.test(msg)) {
+				throw new TypeError("KV value is not a number");
+			}
+			throw err;
+		}
+	}
+
+	/** @inheritdoc */
+	override incr(
+		key: string,
+		by = 1,
+		options: Partial<SetOptions> = {}
+	): Promise<number> {
+		return this.#incrBy(key, by, options);
+	}
+
+	/** @inheritdoc */
+	override decr(
+		key: string,
+		by = 1,
+		options: Partial<SetOptions> = {}
+	): Promise<number> {
+		return this.#incrBy(key, -by, options);
+	}
+
+	// Lua: compare current (stringified) value to expected; swap on match.
+	// Returns 1 on swap, 0 otherwise. Missing key → 0 (GET returns nil which
+	// never equals a non-empty expected string).
+	#CAS_SCRIPT = `
+local current = redis.call('GET', KEYS[1])
+if current == ARGV[1] then
+  if ARGV[3] == '0' then
+    redis.call('SET', KEYS[1], ARGV[2])
+  else
+    redis.call('SET', KEYS[1], ARGV[2], 'EX', tonumber(ARGV[3]))
+  end
+  return 1
+end
+return 0
+`;
+
+	/** @inheritdoc */
+	override async cas(
+		key: string,
+		expected: any,
+		next: any,
+		options: Partial<SetOptions> = {}
+	): Promise<boolean> {
+		this._assertInitialized();
+		const nsKey = this._withNs(key);
+		const { db } = this.options;
+		const ttl = this._resolveTtl(options);
+
+		if (next === undefined) next = null;
+		const expectedSerialized = JSON.stringify(
+			expected === undefined ? null : expected
+		);
+		const nextSerialized = JSON.stringify(next);
+
+		const r = await (db as any).eval(this.#CAS_SCRIPT, {
+			keys: [nsKey],
+			arguments: [expectedSerialized, nextSerialized, String(ttl ?? 0)],
+		});
+		return Number(r) === 1;
+	}
+
+	/** @inheritdoc */
 	override async get(key: string): Promise<any> {
 		this._assertInitialized();
 		key = this._withNs(key);
@@ -184,33 +351,35 @@ export class AdapterRedis extends AdapterAbstract {
 	/** @inheritdoc */
 	override async keys(pattern: string): Promise<string[]> {
 		this._assertInitialized();
-		const { db, isCluster } = this.options;
-
+		const { isCluster } = this.options;
 		if (isCluster) {
 			throw new Error("keys() is not supported in Redis Cluster mode");
 		}
 
-		// Use SCAN instead of KEYS for non-blocking iteration
-		const fullPattern = this.namespace + pattern;
-		const keys: string[] = [];
-		let cursor = "0";
+		const out: string[] = [];
+		for await (const k of this.keysIter(pattern)) out.push(k);
+		return out.toSorted();
+	}
 
+	/** @inheritdoc */
+	override async *keysIter(pattern: string): AsyncIterable<string> {
+		this._assertInitialized();
+		const { db, isCluster } = this.options;
+		if (isCluster) {
+			throw new Error("keysIter() is not supported in Redis Cluster mode");
+		}
+		const fullPattern = this.namespace + pattern;
+		let cursor = "0";
 		do {
 			const result = await db.scan(cursor, {
 				MATCH: fullPattern,
 				COUNT: 100,
 			});
 			cursor = `${result.cursor}`;
-			keys.push(...result.keys.map((k) => String(k)));
+			for (const k of result.keys) {
+				yield this._withoutNs(String(k));
+			}
 		} while (cursor !== "0");
-
-		return keys
-			.map((k) => {
-				// strip namespace if exists
-				if (this.namespace) k = k.slice(this.namespace.length);
-				return k;
-			})
-			.toSorted();
 	}
 
 	/** @inheritdoc */
@@ -234,22 +403,25 @@ export class AdapterRedis extends AdapterAbstract {
 
 	/** @inheritdoc */
 	override async setMultiple(
-		keyValuePairs: [string, any][],
+		entries: readonly SetMultipleEntry[],
 		options: Partial<SetOptions> = {}
 	): Promise<boolean[]> {
 		this._assertInitialized();
 
 		const { db } = this.options;
-		const ttl = this._resolveTtl(options);
+		const normalized = this._normalizePairs(entries);
 		const pipeline = db.multi();
 
-		for (let [key, value] of keyValuePairs) {
-			key = this._withNs(key);
-			pipeline.set(key, JSON.stringify(value), ttl ? { EX: ttl } : {});
+		for (const { key, value, ttl: pairTtl } of normalized) {
+			const ttl = this._resolveTtl({ ttl: pairTtl ?? options.ttl });
+			pipeline.set(
+				this._withNs(key),
+				JSON.stringify(value === undefined ? null : value),
+				ttl ? { EX: ttl } : {}
+			);
 		}
 
 		const res = await pipeline.exec();
-
 		return res.map((v) => String(v) === "OK");
 	}
 
@@ -258,21 +430,20 @@ export class AdapterRedis extends AdapterAbstract {
 		this._assertInitialized();
 		const { db } = this.options;
 
-		keys = keys.map((k) => this._withNs(k));
-		const values = await db.mGet(keys);
+		const nsKeys = keys.map((k) => this._withNs(k));
+		const values = await db.mGet(nsKeys);
 		const result: Record<string, any> = {};
 
-		keys.forEach((key, index) => {
-			key = this._withoutNs(key);
+		keys.forEach((origKey, index) => {
 			const value = values[index];
 			if (value !== null) {
 				try {
-					result[key] = JSON.parse(`${value}`);
+					result[origKey] = JSON.parse(`${value}`);
 				} catch (_err) {
-					result[key] = value;
+					result[origKey] = value;
 				}
 			} else {
-				result[key] = null;
+				result[origKey] = null;
 			}
 		});
 
@@ -287,19 +458,22 @@ export class AdapterRedis extends AdapterAbstract {
 	}
 
 	/** @inheritdoc */
-	override async ttl(key: string): Promise<Date | null | false> {
+	override async ttl(key: string): Promise<TtlResult> {
 		this._assertInitialized();
 		key = this._withNs(key);
 		const ttl = await this.options.db.ttl(key);
 
 		// Key doesn't exist
-		if (ttl === -2) return false;
+		if (ttl === -2) return { state: "missing" };
 
 		// No expiration set
-		if (ttl === -1) return null;
+		if (ttl === -1) return { state: "no-ttl" };
 
 		// Positive number: TTL in seconds remaining
-		return new Date(Date.now() + parseInt(`${ttl}`) * 1_000);
+		return {
+			state: "expires",
+			at: new Date(Date.now() + parseInt(`${ttl}`) * 1_000),
+		};
 	}
 
 	/** @inheritdoc */
@@ -315,11 +489,7 @@ export class AdapterRedis extends AdapterAbstract {
 				case "set": {
 					const ttl = this._resolveTtl(op.options);
 					const val = op.value === undefined ? null : op.value;
-					multi.set(
-						key,
-						JSON.stringify(val),
-						ttl ? { EX: ttl } : {}
-					);
+					multi.set(key, JSON.stringify(val), ttl ? { EX: ttl } : {});
 					break;
 				}
 				case "get":
@@ -331,7 +501,7 @@ export class AdapterRedis extends AdapterAbstract {
 			}
 		}
 
-		const res = await multi.exec() as unknown[];
+		const res = (await multi.exec()) as unknown[];
 
 		// fix results types
 		for (const [i, op] of operations.entries()) {
@@ -358,7 +528,7 @@ export class AdapterRedis extends AdapterAbstract {
 	// this is not optimal quick-n-dirty implementation
 	// DO NOT USE for production data
 	override async __debug_dump(): Promise<
-		Record<string, { value: any; ttl: Date | null | false }>
+		Record<string, { value: any; ttl: Date | null }>
 	> {
 		this._assertInitialized();
 		const { db } = this.options;
@@ -374,11 +544,12 @@ export class AdapterRedis extends AdapterAbstract {
 		} while (cursor !== "0");
 
 		const keys = nsKeys.map((k) => this._withoutNs(k)).toSorted();
-		const out: Record<string, { value: unknown; ttl: Date | null | false }> = {};
+		const out: Record<string, { value: unknown; ttl: Date | null }> = {};
 		for (const key of keys) {
+			const t = await this.ttl(key);
 			out[key] = {
 				value: await this.get(key),
-				ttl: await this.ttl(key),
+				ttl: t.state === "expires" ? t.at : null,
 			};
 		}
 

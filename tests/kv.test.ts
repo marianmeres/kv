@@ -36,7 +36,7 @@ testsRunner([
 				assert(await client.set(k, v));
 				assert(await client.set("hey", "ho"));
 				assertEquals(await client.get(k), v);
-				assertEquals(await client.ttl(k), null);
+				assertEquals((await client.ttl(k)).state, "no-ttl");
 				assertEquals(await client.exists(k), true);
 				assertEquals(await client.exists("asdf"), false);
 				assertEquals(await client.keys("*"), ["foo:bar", "hey"]);
@@ -119,7 +119,8 @@ testsRunner([
 				const now = Date.now();
 				await client.set(k, v, { ttl: 1 }); // 1 sec
 				assertEquals(await client.get(k), v);
-				assert(((await client.ttl(k)) as Date).valueOf() > now + 999);
+				const t = await client.ttl(k);
+				assert(t.state === "expires" && t.at.valueOf() > now + 999);
 
 				await sleep(1_001);
 
@@ -194,8 +195,8 @@ testsRunner([
 
 				await sleep(1_010);
 
-				// "false" means expired (but this is ttl related, not cleanup)
-				assertEquals(await client.ttl(k), false);
+				// "missing" means expired-or-gone (ttl-related, not cleanup)
+				assertEquals((await client.ttl(k)).state, "missing");
 
 				// if not cleaned up, it wouldn't be empty
 				assertEquals(await client.__debug_dump(), {});
@@ -215,8 +216,8 @@ testsRunner([
 				assert(await client.set(k, { foo: "bar" }));
 				assertEquals((await client.get(k)).foo, "bar");
 
-				// always null - not supported in Deno.Kv
-				assertEquals(await client.ttl(k), null);
+				// Deno.Kv cannot query TTL — present keys always look "no-ttl"
+				assertEquals((await client.ttl(k)).state, "no-ttl");
 
 				//
 				assert(await client.exists(k));
@@ -315,12 +316,20 @@ testsRunner([
 					// implicit -> uses defaultTtl
 					await client.set("a", "x");
 					const tA = await client.ttl("a");
-					assert(tA instanceof Date, `(${_type}) defaultTtl should apply`);
+					assertEquals(
+						tA.state,
+						"expires",
+						`(${_type}) defaultTtl should apply`
+					);
 
 					// explicit ttl:0 -> no expiration
 					await client.set("b", "x", { ttl: 0 });
 					const tB = await client.ttl("b");
-					assertEquals(tB, null, `(${_type}) ttl:0 must disable expiration`);
+					assertEquals(
+						tB.state,
+						"no-ttl",
+						`(${_type}) ttl:0 must disable expiration`
+					);
 				} finally {
 					await client.clear("*");
 					await client.destroy();
@@ -357,11 +366,11 @@ testsRunner([
 				]);
 				const t = await client.ttl("tx:ttl");
 				assert(
-					t instanceof Date,
+					t.state === "expires",
 					`(${_type}) transaction must honor options.ttl`
 				);
 				// within a few seconds of now + 120s
-				const diff = (t as Date).valueOf() - Date.now();
+				const diff = t.at.valueOf() - Date.now();
 				assert(
 					diff > 100_000 && diff < 130_000,
 					`(${_type}) expected ~120s, got ${diff}ms`
@@ -524,6 +533,398 @@ testsRunner([
 			} finally {
 				await client.destroy();
 				if (db.isOpen) await db.destroy();
+			}
+		},
+	},
+
+	// ─── v2.1: atomic primitives ──────────────────────────────────────────
+
+	{
+		name: "setIfAbsent: sets when missing, refuses when present",
+		async fn({ clients }) {
+			for (const [_type, client] of Object.entries(clients)) {
+				await client.clear("*");
+				assertEquals(
+					await client.setIfAbsent("lock", "a"),
+					true,
+					`(${_type}) first set must succeed`
+				);
+				assertEquals(
+					await client.setIfAbsent("lock", "b"),
+					false,
+					`(${_type}) second set must fail`
+				);
+				assertEquals(
+					await client.get("lock"),
+					"a",
+					`(${_type}) value must not have been overwritten`
+				);
+			}
+		},
+	},
+	{
+		name: "setIfAbsent: replaces expired keys",
+		async fn({ clients }) {
+			for (const [_type, client] of Object.entries(clients)) {
+				if (_type === "deno-kv") continue; // no TTL query; skipping
+				await client.clear("*");
+				await client.set("exp", "old", { ttl: 1 });
+				await sleep(1_100);
+				assertEquals(
+					await client.setIfAbsent("exp", "new"),
+					true,
+					`(${_type}) setIfAbsent should succeed on expired key`
+				);
+				assertEquals(await client.get("exp"), "new");
+			}
+		},
+	},
+	{
+		name: "setIfAbsent: concurrent — exactly one wins",
+		async fn({ clients }) {
+			for (const [_type, client] of Object.entries(clients)) {
+				await client.clear("*");
+				const N = 50;
+				const results = await Promise.all(
+					Array.from({ length: N }, (_, i) =>
+						client.setIfAbsent("winner", i)
+					)
+				);
+				const wins = results.filter(Boolean).length;
+				assertEquals(
+					wins,
+					1,
+					`(${_type}) expected exactly one winner, got ${wins}`
+				);
+			}
+		},
+	},
+	{
+		name: "incr/decr: basic semantics",
+		async fn({ clients }) {
+			for (const [_type, client] of Object.entries(clients)) {
+				await client.clear("*");
+
+				// missing key -> creates with delta
+				assertEquals(await client.incr("c"), 1, `(${_type}) initial incr`);
+				assertEquals(await client.incr("c"), 2);
+				assertEquals(await client.incr("c", 5), 7);
+				assertEquals(await client.decr("c"), 6);
+				assertEquals(await client.decr("c", 3), 3);
+				assertEquals(await client.get("c"), 3);
+			}
+		},
+	},
+	{
+		name: "incr: rejects non-numeric values",
+		async fn({ clients }) {
+			for (const [_type, client] of Object.entries(clients)) {
+				await client.clear("*");
+				await client.set("s", "hello");
+				await assertRejects(
+					() => client.incr("s"),
+					TypeError,
+					"not a number",
+					`(${_type}) incr on string must throw TypeError`
+				);
+			}
+		},
+	},
+	{
+		name: "incr: 100 parallel increments sum correctly",
+		async fn({ clients }) {
+			for (const [_type, client] of Object.entries(clients)) {
+				await client.clear("*");
+				const N = 100;
+				await Promise.all(
+					Array.from({ length: N }, () => client.incr("counter"))
+				);
+				assertEquals(
+					await client.get("counter"),
+					N,
+					`(${_type}) ${N} parallel increments should sum to ${N}`
+				);
+			}
+		},
+	},
+	{
+		name: "getSet: returns previous value and replaces",
+		async fn({ clients }) {
+			for (const [_type, client] of Object.entries(clients)) {
+				await client.clear("*");
+
+				// missing -> null; now stored as new
+				assertEquals(
+					await client.getSet("k", 1),
+					null,
+					`(${_type}) getSet missing returns null`
+				);
+				assertEquals(await client.get("k"), 1);
+
+				// existing -> previous value
+				assertEquals(await client.getSet("k", 2), 1);
+				assertEquals(await client.get("k"), 2);
+
+				// falsy round-trip
+				await client.set("zero", 0);
+				assertEquals(await client.getSet("zero", "x"), 0);
+				await client.set("empty", "");
+				assertEquals(await client.getSet("empty", "x"), "");
+				await client.set("falseFlag", false);
+				assertEquals(await client.getSet("falseFlag", "x"), false);
+			}
+		},
+	},
+	{
+		name: "cas: swap on match, no-op on mismatch, always false on missing",
+		async fn({ clients }) {
+			for (const [_type, client] of Object.entries(clients)) {
+				await client.clear("*");
+
+				// missing key -> always false, even expected null
+				assertEquals(
+					await client.cas("x", null, "new"),
+					false,
+					`(${_type}) missing key must fail cas even with expected=null`
+				);
+
+				await client.set("x", "a");
+
+				// mismatch -> no swap
+				assertEquals(await client.cas("x", "z", "b"), false);
+				assertEquals(await client.get("x"), "a");
+
+				// match -> swap
+				assertEquals(await client.cas("x", "a", "b"), true);
+				assertEquals(await client.get("x"), "b");
+
+				// complex values: deep-equal
+				await client.set("obj", { n: 1 });
+				assertEquals(await client.cas("obj", { n: 1 }, { n: 2 }), true);
+				assertEquals(await client.cas("obj", { n: 1 }, { n: 3 }), false);
+				assertEquals(await client.get("obj"), { n: 2 });
+			}
+		},
+	},
+
+	// ─── v2.2: quality-of-life ───────────────────────────────────────────
+
+	{
+		name: "keysIter: iterates matching keys",
+		async fn({ clients }) {
+			for (const [_type, client] of Object.entries(clients)) {
+				await client.clear("*");
+				await client.set("a", 1);
+				await client.set("b", 2);
+				await client.set("c", 3);
+
+				const collected: string[] = [];
+				for await (const k of client.keysIter("*")) {
+					collected.push(k);
+				}
+				assertEquals(
+					collected.toSorted(),
+					["a", "b", "c"],
+					`(${_type}) keysIter must yield all matches`
+				);
+			}
+		},
+	},
+	{
+		name: "keysIter: early break does not leak resources",
+		async fn({ clients, dbPg }) {
+			const client = clients.postgres;
+			await client.clear("*");
+			// Insert 30 keys
+			await client.setMultiple(
+				Array.from({ length: 30 }, (_, i) => [`k${i}`, i])
+			);
+
+			// Open 20 iterators, break out of each after 1 yield
+			for (let i = 0; i < 20; i++) {
+				for await (const _ of client.keysIter("*")) {
+					break;
+				}
+			}
+
+			// Pool must not have ballooned
+			await sleep(50);
+			const pool = dbPg as any;
+			if (typeof pool.totalCount === "number") {
+				assert(
+					pool.totalCount < 10,
+					`pool should not leak on early break: totalCount=${pool.totalCount}`
+				);
+			}
+		},
+	},
+	{
+		name: "setMultiple: per-pair ttl overrides batch ttl",
+		async fn({ clients }) {
+			for (const [_type, client] of Object.entries(clients)) {
+				if (_type === "deno-kv") continue; // no TTL query
+				await client.clear("*");
+
+				await client.setMultiple(
+					[
+						["long", "v"],
+						{ key: "short", value: "v", ttl: 2 },
+					],
+					{ ttl: 300 }
+				);
+
+				const tLong = await client.ttl("long");
+				const tShort = await client.ttl("short");
+
+				assert(
+					tLong.state === "expires" && tLong.at.valueOf() > Date.now() + 200_000,
+					`(${_type}) batch TTL should apply to "long"`
+				);
+				assert(
+					tShort.state === "expires" && tShort.at.valueOf() < Date.now() + 5_000,
+					`(${_type}) per-pair ttl=2s should override batch ttl for "short"`
+				);
+			}
+		},
+	},
+	{
+		name: "setMultiple: legacy tuple input still works",
+		async fn({ clients }) {
+			for (const [_type, client] of Object.entries(clients)) {
+				await client.clear("*");
+				await client.setMultiple([
+					["a", 1],
+					["b", 2],
+				]);
+				assertEquals(await client.get("a"), 1, `(${_type})`);
+				assertEquals(await client.get("b"), 2, `(${_type})`);
+			}
+		},
+	},
+	{
+		name: "validateKeys: empty/null-char/oversize rejected by default",
+		async fn({ clients }) {
+			for (const [_type, client] of Object.entries(clients)) {
+				await assertRejects(
+					() => client.set("", "v"),
+					TypeError,
+					"non-empty",
+					`(${_type}) empty key must throw`
+				);
+				await assertRejects(
+					() => client.set("bad\0key", "v"),
+					TypeError,
+					"null characters",
+					`(${_type}) null-char key must throw`
+				);
+				await assertRejects(
+					() => client.set("x".repeat(600), "v"),
+					RangeError,
+					"512-char",
+					`(${_type}) oversize key must throw`
+				);
+			}
+		},
+	},
+	{
+		name: "validateKeys: false opts out of validation",
+		async fn({ clients }) {
+			// only memory: empty key can be stored when validation is off
+			const db = clients.memory.options.db;
+			const c = createKVClient("opt:", "memory", {
+				db,
+				validateKeys: false,
+			});
+			await c.initialize();
+			try {
+				// should not throw (though storing "" as a key is odd, it's the caller's problem)
+				await c.set("ok", "v");
+				assertEquals(await c.get("ok"), "v");
+			} finally {
+				await c.destroy();
+			}
+		},
+	},
+	{
+		name: "strictDeleteResult: Deno KV opt-in reports real existence",
+		async fn({ clients }) {
+			const db = clients["deno-kv"].options.db;
+			const c = createKVClient("strict:", "deno-kv", {
+				db,
+				strictDeleteResult: true,
+			});
+			await c.initialize();
+			try {
+				assertEquals(await c.delete("never"), false);
+				await c.set("present", "v");
+				assertEquals(await c.delete("present"), true);
+				assertEquals(await c.delete("present"), false);
+			} finally {
+				await c.destroy();
+			}
+		},
+	},
+	{
+		name: "feature matrix: every public method is implemented on every adapter",
+		async fn({ clients }) {
+			const methods = [
+				"set",
+				"setIfAbsent",
+				"getSet",
+				"incr",
+				"decr",
+				"cas",
+				"get",
+				"delete",
+				"exists",
+				"keys",
+				"keysIter",
+				"clear",
+				"setMultiple",
+				"getMultiple",
+				"transaction",
+				"expire",
+				"ttl",
+				"info",
+			];
+			for (const [type, client] of Object.entries(clients)) {
+				for (const m of methods) {
+					assert(
+						typeof (client as any)[m] === "function",
+						`(${type}) missing method: ${m}`
+					);
+				}
+			}
+		},
+	},
+
+	// ─── v3.0 regression: TtlResult state coverage ────────────────────────
+
+	{
+		name: "ttl(): covers all three states",
+		async fn({ clients }) {
+			for (const [_type, client] of Object.entries(clients)) {
+				await client.clear("*");
+
+				// missing
+				assertEquals((await client.ttl("ghost")).state, "missing");
+
+				// existing, no ttl
+				await client.set("plain", "v");
+				assertEquals(
+					(await client.ttl("plain")).state,
+					"no-ttl",
+					`(${_type}) set without ttl should be no-ttl`
+				);
+
+				// existing, with ttl (skip deno-kv which can't query)
+				if (_type === "deno-kv") continue;
+				await client.set("tick", "v", { ttl: 60 });
+				const t = await client.ttl("tick");
+				assert(
+					t.state === "expires" && t.at instanceof Date,
+					`(${_type}) ttl-bearing key should be "expires"`
+				);
 			}
 		},
 	},

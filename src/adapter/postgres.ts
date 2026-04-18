@@ -7,7 +7,9 @@
 import {
 	AdapterAbstract,
 	type Operation,
+	type SetMultipleEntry,
 	type SetOptions,
+	type TtlResult,
 	type AdapterAbstractOptions,
 } from "./abstract.ts";
 import { createClog } from "@marianmeres/clog";
@@ -44,30 +46,6 @@ type PgExecutor = {
  *
  * Provides persistent key-value storage using PostgreSQL with JSONB values.
  * Automatically creates the required table and indexes on initialization.
- *
- * @remarks
- * - Uses UPSERT (INSERT ... ON CONFLICT) for atomic set operations
- * - Uses PostgreSQL transactions for the `transaction()` method — when `db`
- *   is a `pg.Pool`, a single client is checked out for the duration of the
- *   transaction so BEGIN/COMMIT/ROLLBACK and all contained queries run on
- *   the same physical connection
- * - Values are stored as JSONB for efficient querying
- * - Supports automatic TTL cleanup via background timer
- * - Table schema: key (VARCHAR), value (JSONB), expires_at, created_at, updated_at
- *
- * @example
- * ```typescript
- * import pg from 'pg';
- *
- * const pool = new pg.Pool({ connectionString: 'postgres://...' });
- * const client = createKVClient("myapp:", "postgres", {
- *   db: pool,
- *   tableName: "kv_store",
- *   ttlCleanupIntervalSec: 300, // Clean expired keys every 5 minutes
- * });
- * await client.initialize();
- * await client.set("config:theme", { dark: true });
- * ```
  */
 export class AdapterPostgres extends AdapterAbstract {
 	override _type = "postgres";
@@ -78,6 +56,7 @@ export class AdapterPostgres extends AdapterAbstract {
 		db: null!, // will be set in constructor via options merge
 		tableName: "__kv",
 		ttlCleanupIntervalSec: 0,
+		validateKeys: true,
 	};
 
 	#cleanupTimer: ReturnType<typeof setTimeout> | undefined;
@@ -94,7 +73,9 @@ export class AdapterPostgres extends AdapterAbstract {
 		}
 		// validate tableName — it is spliced into SQL verbatim, so guard
 		// against surprises. Allow optional schema prefix (one dot).
-		if (!/^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$/.test(this.options.tableName)) {
+		if (
+			!/^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$/.test(this.options.tableName)
+		) {
 			throw new Error(
 				`Invalid tableName "${this.options.tableName}". Only word characters and a single "schema." prefix are allowed.`
 			);
@@ -174,7 +155,7 @@ export class AdapterPostgres extends AdapterAbstract {
 	/**
 	 * Convert Redis-style glob to a PostgreSQL LIKE pattern.
 	 * Literal `%`, `_`, and `\` are escaped with `\`; `*`/`?` become `%`/`_`.
-	 * LIKE queries using this output must include `ESCAPE '\'` — see {@link #likeEscapeClause}.
+	 * LIKE queries using this output must include `ESCAPE '\'`.
 	 */
 	#likePattern(pattern: string) {
 		return pattern
@@ -214,7 +195,6 @@ export class AdapterPostgres extends AdapterAbstract {
 		const ttl = this._resolveTtl(options);
 		const expiresAt = ttl ? new Date(Date.now() + ttl * 1000) : null;
 
-		// a.k.a. UPSERT
 		await exec.query(
 			`INSERT INTO ${tableName} (key, value, expires_at, updated_at)
             VALUES ($1, $2, $3, NOW())
@@ -226,6 +206,165 @@ export class AdapterPostgres extends AdapterAbstract {
 		);
 
 		return true;
+	}
+
+	/** @inheritdoc */
+	override async setIfAbsent(
+		key: string,
+		value: any,
+		options: Partial<SetOptions> = {}
+	): Promise<boolean> {
+		this._assertInitialized();
+		const nsKey = this._withNs(key);
+		const { db, tableName } = this.options;
+		const ttl = this._resolveTtl(options);
+		const expiresAt = ttl ? new Date(Date.now() + ttl * 1000) : null;
+
+		// INSERT on new keys; UPDATE only when the existing row is expired.
+		// (Live keys stay untouched — the hallmark of setIfAbsent.)
+		const { rowCount } = await db.query(
+			`INSERT INTO ${tableName} (key, value, expires_at, updated_at)
+            VALUES ($1, $2, $3, NOW())
+            ON CONFLICT (key) DO UPDATE SET
+                value = EXCLUDED.value,
+                expires_at = EXCLUDED.expires_at,
+                updated_at = NOW()
+            WHERE ${tableName}.expires_at IS NOT NULL AND ${tableName}.expires_at <= NOW()`,
+			[nsKey, JSON.stringify(value ?? null), expiresAt]
+		);
+		return (rowCount ?? 0) > 0;
+	}
+
+	/** @inheritdoc */
+	override async getSet(
+		key: string,
+		value: any,
+		options: Partial<SetOptions> = {}
+	): Promise<any> {
+		this._assertInitialized();
+		const nsKey = this._withNs(key);
+		const { db, tableName } = this.options;
+		const ttl = this._resolveTtl(options);
+		const expiresAt = ttl ? new Date(Date.now() + ttl * 1000) : null;
+
+		// CTE captures pre-write state; UPSERT writes; RETURNING surfaces the prev.
+		const { rows } = await db.query(
+			`WITH prev AS (
+                SELECT value FROM ${tableName}
+                WHERE key = $1 AND (expires_at IS NULL OR expires_at > NOW())
+            ), upserted AS (
+                INSERT INTO ${tableName} (key, value, expires_at, updated_at)
+                VALUES ($1, $2, $3, NOW())
+                ON CONFLICT (key) DO UPDATE SET
+                    value = EXCLUDED.value,
+                    expires_at = EXCLUDED.expires_at,
+                    updated_at = NOW()
+                RETURNING 1
+            )
+            SELECT (SELECT value FROM prev) AS prev`,
+			[nsKey, JSON.stringify(value ?? null), expiresAt]
+		);
+		return rows[0]?.prev ?? null;
+	}
+
+	async #incrBy(
+		key: string,
+		delta: number,
+		options: Partial<SetOptions> = {}
+	): Promise<number> {
+		this._assertInitialized();
+		const nsKey = this._withNs(key);
+		const { db, tableName } = this.options;
+		const ttl = this._resolveTtl(options);
+		const expiresAt = ttl ? new Date(Date.now() + ttl * 1000) : null;
+
+		// - New key OR expired key: value = delta, expires_at = $ttl
+		// - Live key: value = old + delta, preserve existing expires_at
+		// The nested cast `value::text::numeric` throws 22P02 when the stored
+		// value is not a JSON number — we translate that to TypeError.
+		try {
+			const { rows } = await db.query(
+				`INSERT INTO ${tableName} (key, value, expires_at, updated_at)
+                VALUES ($1, to_jsonb($2::numeric), $3, NOW())
+                ON CONFLICT (key) DO UPDATE SET
+                    value = CASE
+                        WHEN ${tableName}.expires_at IS NOT NULL AND ${tableName}.expires_at <= NOW()
+                        THEN to_jsonb($2::numeric)
+                        ELSE to_jsonb(${tableName}.value::text::numeric + $2::numeric)
+                    END,
+                    expires_at = CASE
+                        WHEN ${tableName}.expires_at IS NOT NULL AND ${tableName}.expires_at <= NOW()
+                        THEN EXCLUDED.expires_at
+                        ELSE ${tableName}.expires_at
+                    END,
+                    updated_at = NOW()
+                RETURNING value`,
+				[nsKey, delta, expiresAt]
+			);
+			return Number(rows[0].value);
+		} catch (err: any) {
+			if (
+				err?.code === "22P02" ||
+				/invalid input syntax for type numeric/i.test(err?.message ?? "")
+			) {
+				throw new TypeError("KV value is not a number");
+			}
+			throw err;
+		}
+	}
+
+	/** @inheritdoc */
+	override incr(
+		key: string,
+		by = 1,
+		options: Partial<SetOptions> = {}
+	): Promise<number> {
+		return this.#incrBy(key, by, options);
+	}
+
+	/** @inheritdoc */
+	override decr(
+		key: string,
+		by = 1,
+		options: Partial<SetOptions> = {}
+	): Promise<number> {
+		return this.#incrBy(key, -by, options);
+	}
+
+	/** @inheritdoc */
+	override async cas(
+		key: string,
+		expected: any,
+		next: any,
+		options: Partial<SetOptions> = {}
+	): Promise<boolean> {
+		this._assertInitialized();
+		const nsKey = this._withNs(key);
+		const { db, tableName } = this.options;
+		const hasTtl = options.ttl !== undefined;
+		const ttl = hasTtl ? this._resolveTtl(options) : undefined;
+		const expiresAt = ttl ? new Date(Date.now() + ttl * 1000) : null;
+
+		const expectedJson = JSON.stringify(expected ?? null);
+		const nextJson = JSON.stringify(next ?? null);
+
+		const sql = hasTtl
+			? `UPDATE ${tableName}
+                SET value = $2::jsonb, expires_at = $4, updated_at = NOW()
+                WHERE key = $1
+                  AND value = $3::jsonb
+                  AND (expires_at IS NULL OR expires_at > NOW())`
+			: `UPDATE ${tableName}
+                SET value = $2::jsonb, updated_at = NOW()
+                WHERE key = $1
+                  AND value = $3::jsonb
+                  AND (expires_at IS NULL OR expires_at > NOW())`;
+
+		const params: any[] = [nsKey, nextJson, expectedJson];
+		if (hasTtl) params.push(expiresAt);
+
+		const { rowCount } = await db.query(sql, params);
+		return (rowCount ?? 0) > 0;
 	}
 
 	/** @inheritdoc */
@@ -296,9 +435,57 @@ export class AdapterPostgres extends AdapterAbstract {
             ORDER BY key`,
 			[this.#withNsLike(pattern)]
 		);
-		return rows
-			.map((row) => this._withoutNs(row.key))
-			.toSorted();
+		return rows.map((row) => this._withoutNs(row.key)).toSorted();
+	}
+
+	/** @inheritdoc */
+	override async *keysIter(pattern: string): AsyncIterable<string> {
+		this._assertInitialized();
+		const { tableName } = this.options;
+
+		const { client, release } = await this.#acquireClient();
+		// Use a per-call cursor name so multiple iterators on the same PG
+		// client can't collide. `toString(36)` only emits [0-9a-z].
+		const cursorName = `kv_iter_${Math.random().toString(36).slice(2)}`;
+
+		let inTxn = false;
+		try {
+			await client.query("BEGIN");
+			inTxn = true;
+			await client.query(
+				`DECLARE ${cursorName} NO SCROLL CURSOR FOR
+                SELECT key FROM ${tableName}
+                WHERE key LIKE $1${this.#likeEscape}
+                AND (expires_at IS NULL OR expires_at > NOW())
+                ORDER BY key`,
+				[this.#withNsLike(pattern)]
+			);
+			while (true) {
+				const { rows } = await client.query(`FETCH 500 FROM ${cursorName}`);
+				if (rows.length === 0) break;
+				for (const row of rows) {
+					yield this._withoutNs(row.key);
+				}
+			}
+		} finally {
+			if (inTxn) {
+				try {
+					await client.query(`CLOSE ${cursorName}`);
+				} catch {
+					// cursor may already be gone if the txn aborted
+				}
+				try {
+					await client.query("COMMIT");
+				} catch {
+					try {
+						await client.query("ROLLBACK");
+					} catch {
+						// ignore — caller will see the original error
+					}
+				}
+			}
+			release();
+		}
 	}
 
 	/** @inheritdoc */
@@ -329,30 +516,33 @@ export class AdapterPostgres extends AdapterAbstract {
 
 	/** @inheritdoc */
 	override async setMultiple(
-		keyValuePairs: [string, any][],
+		entries: readonly SetMultipleEntry[],
 		options: Partial<SetOptions> = {}
 	): Promise<boolean[]> {
 		this._assertInitialized();
 
-		if (keyValuePairs.length === 0) return [];
+		if (entries.length === 0) return [];
 
+		const normalized = this._normalizePairs(entries);
 		const { db, tableName } = this.options;
-		const ttl = this._resolveTtl(options);
-		const expiresAt = ttl ? new Date(Date.now() + ttl * 1000) : null;
 
-		const placeholders = keyValuePairs
-			.map((_, i) => `($${i * 3 + 1}, $${i * 3 + 2}, $${i * 3 + 3})`)
-			.join(", ");
-
+		const placeholders: string[] = [];
 		const params: (string | Date | null)[] = [];
-		for (const [k, v] of keyValuePairs) {
-			params.push(this._withNs(k), JSON.stringify(v ?? null), expiresAt);
+		let idx = 1;
+		for (const { key, value, ttl: pairTtl } of normalized) {
+			const ttl = this._resolveTtl({ ttl: pairTtl ?? options.ttl });
+			const expiresAt = ttl ? new Date(Date.now() + ttl * 1000) : null;
+			placeholders.push(`($${idx++}, $${idx++}, $${idx++})`);
+			params.push(
+				this._withNs(key),
+				JSON.stringify(value ?? null),
+				expiresAt
+			);
 		}
 
-		// a.k.a UPSERT
 		const sql = `
             INSERT INTO ${tableName} (key, value, expires_at)
-            VALUES ${placeholders}
+            VALUES ${placeholders.join(", ")}
             ON CONFLICT (key) DO UPDATE SET
                 value = EXCLUDED.value,
                 expires_at = EXCLUDED.expires_at,
@@ -360,7 +550,7 @@ export class AdapterPostgres extends AdapterAbstract {
         `;
 		await db.query(sql, params);
 
-		return keyValuePairs.map(() => true);
+		return normalized.map(() => true);
 	}
 
 	/** @inheritdoc */
@@ -413,7 +603,7 @@ export class AdapterPostgres extends AdapterAbstract {
 	}
 
 	/** @inheritdoc */
-	override async ttl(key: string): Promise<Date | null | false> {
+	override async ttl(key: string): Promise<TtlResult> {
 		this._assertInitialized();
 		key = this._withNs(key);
 
@@ -424,26 +614,22 @@ export class AdapterPostgres extends AdapterAbstract {
 			[key]
 		);
 
-		// Key doesn't exist
-		if (rows.length === 0) return false;
+		if (rows.length === 0) return { state: "missing" };
 
 		const expiresAt = rows[0].expires_at;
-		// No expiration set
-		if (!expiresAt) return null;
+		if (!expiresAt) return { state: "no-ttl" };
 
-		return new Date(expiresAt);
+		// expired-but-not-yet-cleaned counts as missing (matches get() filter)
+		const at = new Date(expiresAt);
+		if (at.valueOf() <= Date.now()) return { state: "missing" };
+		return { state: "expires", at };
 	}
 
 	/**
 	 * Acquire a single pinned connection for a transaction.
-	 *
-	 * If `db` is a `pg.Pool`, a client is checked out and a `release` callback
-	 * is returned. If `db` is already a `pg.Client`, it is used directly and
-	 * `release` is a no-op.
 	 */
 	async #acquireClient(): Promise<{ client: PgExecutor; release: () => void }> {
 		const { db } = this.options as { db: any };
-		// pg.Pool exposes `totalCount`; pg.Client does not.
 		if (typeof db.totalCount === "number" && typeof db.connect === "function") {
 			const client = await db.connect();
 			return { client, release: () => client.release() };
@@ -482,12 +668,8 @@ export class AdapterPostgres extends AdapterAbstract {
 				try {
 					await client.query("ROLLBACK");
 				} catch (rollbackErr) {
-					// Rollback failure is a real problem — surface it even though
-					// we re-throw the original error below.
 					logger?.error?.(`Rollback failed: ${rollbackErr}`);
 				}
-				// Do NOT log `err` here — we're re-throwing it; the caller will
-				// see it. Double-logging is just noise.
 				throw err;
 			}
 		} finally {
@@ -498,7 +680,7 @@ export class AdapterPostgres extends AdapterAbstract {
 	}
 
 	override async __debug_dump(): Promise<
-		Record<string, { value: any; ttl: Date | null | false }>
+		Record<string, { value: any; ttl: Date | null }>
 	> {
 		this._assertInitialized();
 
@@ -509,11 +691,11 @@ export class AdapterPostgres extends AdapterAbstract {
 			[this.#withNsLike("*")]
 		);
 
-		return rows.reduce<Record<string, { value: unknown; ttl: Date | null | false }>>(
+		return rows.reduce<Record<string, { value: unknown; ttl: Date | null }>>(
 			(m, row) => {
 				m[this._withoutNs(row.key)] = {
 					value: row.value,
-					ttl: row.expires_at,
+					ttl: row.expires_at ? new Date(row.expires_at) : null,
 				};
 				return m;
 			},

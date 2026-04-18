@@ -48,17 +48,44 @@ await client.keys('my:*'); // ['my:foo:key']
 ## API
 
 ```typescript
+// single-key ops
 client.set(key: string, value: any, options?): Promise<boolean>
+client.setIfAbsent(key: string, value: any, options?): Promise<boolean>
 client.get(key: string): Promise<any>
+client.getSet(key: string, value: any, options?): Promise<any>  // returns previous value
 client.delete(key: string): Promise<boolean>
 client.exists(key: string): Promise<boolean>
+
+// atomic primitives
+client.incr(key: string, by?: number, options?): Promise<number>
+client.decr(key: string, by?: number, options?): Promise<number>
+client.cas(key: string, expected: any, next: any, options?): Promise<boolean>
+
+// patterns & iteration
 client.keys(pattern: string): Promise<string[]>
+client.keysIter(pattern: string): AsyncIterable<string>
 client.clear(pattern: string): Promise<number>
-client.setMultiple(keyValuePairs: [string, any][], options?): Promise<any[]>
+
+// batch
+client.setMultiple(
+  entries: [string, any][] | { key: string; value: any; ttl?: number }[],
+  options?
+): Promise<boolean[]>
 client.getMultiple(keys: string[]): Promise<Record<string, any>>
 client.transaction(operations: Operation[]): Promise<any[]>
+
+// TTL
 client.expire(key: string, ttl: number): Promise<boolean>
-client.ttl(key: string): Promise<Date | null | false>
+client.ttl(key: string): Promise<TtlResult>
+```
+
+### `TtlResult`
+
+```typescript
+type TtlResult =
+  | { state: "missing" }
+  | { state: "no-ttl" }
+  | { state: "expires"; at: Date };
 ```
 
 ## Pattern Syntax
@@ -75,11 +102,14 @@ client.ttl(key: string): Promise<Date | null | false>
 |---|:-:|:-:|:-:|:-:|
 | Persistent | ✗ | ✓ | ✓ | ✓ |
 | TTL on `set()` | ✓ | ✓ | ✓ | ✓ |
-| `ttl()` query | ✓ | ✓ | ✓ | always `null` |
+| `ttl()` → `expires`/`no-ttl`/`missing` | ✓ | ✓ | ✓ | `no-ttl`/`missing` only |
 | `expire()` | ✓ | ✓ | ✓ | always `false` |
+| Atomic `setIfAbsent` / `incr` / `decr` / `cas` / `getSet` | ✓ | ✓ (Lua) | ✓ (UPSERT) | ✓ (CAS retry loop) |
 | Sorted `keys()` | ✓ | ✓ | ✓ | ✓ |
+| Streaming `keysIter()` | ✓ | ✓ (SCAN) | ✓ (cursor) | ✓ (native) |
+| Per-pair TTL in `setMultiple` | ✓ | ✓ | ✓ | ✓ |
 | Atomic `transaction()` | ✓ (single-threaded) | ✓ (MULTI) | ✓ (BEGIN/COMMIT) | ✓ when no `get` ops |
-| `delete()` returns real existed-flag | ✓ | ✓ | ✓ | always `true` |
+| `delete()` returns real existed-flag | ✓ | ✓ | ✓ | opt-in via `strictDeleteResult` |
 | Background TTL cleanup | optional | native (Redis does it) | optional | native (Deno.Kv does it) |
 | `keys()` / `clear()` | ✓ | ✓ (non-cluster only) | ✓ | ✓ |
 
@@ -106,6 +136,36 @@ client.ttl(key: string): Promise<Date | null | false>
 ### Memory
 - Data is not persisted (in-memory only).
 - Supports optional TTL cleanup via `ttlCleanupIntervalSec` option.
+
+## Breaking Changes (2.1 / 3.0 candidate)
+
+Since 2.0, the following changes are in this tree:
+
+**v3.0 (breaking — bump major if you ship these as-is):**
+- **`ttl(key)` now returns a discriminated `TtlResult`** — `{ state: "missing" | "no-ttl" | "expires", at? }` — instead of `Date | null | false`. Migration:
+  ```ts
+  // before
+  const t = await client.ttl(k);
+  if (t instanceof Date) use(t);
+  else if (t === null) /* no ttl */
+  else /* missing */
+
+  // after
+  const t = await client.ttl(k);
+  switch (t.state) {
+    case "expires": use(t.at); break;
+    case "no-ttl": /* … */; break;
+    case "missing": /* … */; break;
+  }
+  ```
+- **Key validation is on by default.** Non-empty strings, no `\0`, total `namespace + key` length ≤ 512. Set `validateKeys: false` on the adapter options to opt out. Previous behavior silently accepted empty/overlong keys and let the backend error cryptically.
+
+**v2.1 / v2.2 (additive):**
+- New methods `setIfAbsent`, `incr`, `decr`, `getSet`, `cas`, `keysIter` on every adapter.
+- `setMultiple` accepts `{ key, value, ttl? }[]` entries in addition to the legacy `[key, value][]` tuples. Per-pair `ttl` overrides batch `options.ttl`.
+- Deno KV: new `strictDeleteResult: true` option pre-checks existence so `delete()` returns the real did-it-exist flag (default stays `true` for BC).
+- Deno KV: new `atomicRetryAttempts` option (default 20) for CAS-based primitives under contention.
+- Default `clear()` in Deno KV now batches into atomic commits (500 at a time).
 
 ## Breaking Changes (2.0.0)
 

@@ -16,8 +16,15 @@ import {
 import { AdapterRedis, type AdapterRedisOptions } from "./adapter/redis.ts";
 
 // Re-export all types for consumers
-export type { SetOptions, AdapterInfo, AdapterAbstractOptions, Operation } from "./adapter/abstract.ts";
-export { AdapterAbstract } from "./adapter/abstract.ts";
+export type {
+	SetOptions,
+	AdapterInfo,
+	AdapterAbstractOptions,
+	Operation,
+	TtlResult,
+	SetMultipleEntry,
+} from "./adapter/abstract.ts";
+export { AdapterAbstract, KvRaceError } from "./adapter/abstract.ts";
 export { AdapterMemory, type AdapterMemoryOptions } from "./adapter/memory.ts";
 export { AdapterRedis, type AdapterRedisOptions } from "./adapter/redis.ts";
 export { AdapterPostgres, type AdapterPostgresOptions } from "./adapter/postgres.ts";

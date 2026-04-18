@@ -165,6 +165,98 @@ await client.set("pinned", 1, { ttl: 0 }); // never expires, even if defaultTtl 
 
 ---
 
+#### `setIfAbsent(key, value, options?)`
+
+Stores a value only if the key does not already exist. Atomic.
+
+```typescript
+setIfAbsent(key: string, value: any, options?: Partial<SetOptions>): Promise<boolean>
+```
+
+**Returns:** `true` if the value was stored, `false` if the key existed. Expired keys are treated as missing — `setIfAbsent` succeeds on them.
+
+**Example** (lock pattern):
+
+```typescript
+if (await client.setIfAbsent("lock:job:42", { by: "worker-1" }, { ttl: 30 })) {
+  // we got the lock
+}
+```
+
+---
+
+#### `getSet(key, value, options?)`
+
+Atomically replaces the stored value and returns the previous one.
+
+```typescript
+getSet(key: string, value: any, options?: Partial<SetOptions>): Promise<any>
+```
+
+**Returns:** the previous value, or `null` if the key did not exist.
+
+Stored falsy values (`false`, `0`, `""`, `null`) round-trip correctly.
+
+---
+
+#### `incr(key, by?, options?)` / `decr(key, by?, options?)`
+
+Atomically increments (or decrements) a numeric value.
+
+```typescript
+incr(key: string, by?: number, options?: Partial<SetOptions>): Promise<number>
+decr(key: string, by?: number, options?: Partial<SetOptions>): Promise<number>
+```
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `key` | `string` | — | The key to increment |
+| `by` | `number` | `1` | Amount to add (or subtract for `decr`) |
+| `options` | `Partial<SetOptions>` | — | TTL only applies on key creation — existing keys keep their TTL |
+
+**Returns:** the new value after the operation.
+
+**Errors:** throws `TypeError("KV value is not a number")` when the stored value is not a JSON number. On Deno KV under heavy contention, may throw `KvRaceError` after `atomicRetryAttempts` (default 20) failed CAS attempts.
+
+**Example:**
+
+```typescript
+await client.incr("views");           // creates "views" = 1
+await client.incr("views", 10);       // now 11
+await client.decr("views", 3);        // now 8
+
+// Sliding window: TTL only applied on first hit
+await client.incr("rate:user:1", 1, { ttl: 60 });
+```
+
+---
+
+#### `cas(key, expected, next, options?)`
+
+Atomic compare-and-set — replaces the stored value only when the current value deep-equals `expected`.
+
+```typescript
+cas(key: string, expected: any, next: any, options?: Partial<SetOptions>): Promise<boolean>
+```
+
+**Returns:** `true` if the swap happened, `false` otherwise (mismatch or missing key).
+
+> Missing keys never match, even when `expected` is `null`.
+
+When `options.ttl` is supplied, the stored expiration is updated on success. When it is omitted, the existing TTL is preserved (Deno KV: best-effort — see the Deno KV section).
+
+**Example** (optimistic update):
+
+```typescript
+const current = await client.get("counter");
+const swapped = await client.cas("counter", current, current + 1);
+if (!swapped) { /* retry or reconcile */ }
+```
+
+---
+
 #### `get(key)`
 
 Retrieves a value by its key.
@@ -262,10 +354,15 @@ await client.expire("session:abc", 1800); // Expire in 30 minutes
 
 #### `ttl(key)`
 
-Gets the expiration time of a key.
+Gets the expiration state of a key as a discriminated union.
 
 ```typescript
-ttl(key: string): Promise<Date | null | false>
+ttl(key: string): Promise<TtlResult>
+
+type TtlResult =
+  | { state: "missing" }
+  | { state: "no-ttl" }
+  | { state: "expires"; at: Date };
 ```
 
 **Parameters:**
@@ -274,24 +371,38 @@ ttl(key: string): Promise<Date | null | false>
 |-----------|------|-------------|
 | `key` | `string` | The key to check. |
 
-**Returns:**
-- `Date` - The expiration date if TTL is set
-- `null` - If the key exists but has no expiration
-- `false` - If the key doesn't exist or has expired
+**Returns:** A `TtlResult`. Switch on `.state`:
+- `"missing"` — key doesn't exist (or has expired)
+- `"no-ttl"` — key exists with no expiration
+- `"expires"` — key exists and will expire at `.at`
 
-> **Note:** Deno KV always returns `null` (TTL query not supported).
+> **Note:** Deno KV cannot query TTL — existing keys always return `{ state: "no-ttl" }`; absent keys return `{ state: "missing" }`.
 
 **Example:**
 
 ```typescript
-const expiry = await client.ttl("session:abc");
-if (expiry instanceof Date) {
-  console.log(`Expires at: ${expiry.toISOString()}`);
-} else if (expiry === null) {
-  console.log("No expiration set");
-} else {
-  console.log("Key does not exist");
+const t = await client.ttl("session:abc");
+switch (t.state) {
+  case "expires": console.log(`Expires at ${t.at.toISOString()}`); break;
+  case "no-ttl":  console.log("No expiration set"); break;
+  case "missing": console.log("Key does not exist"); break;
 }
+```
+
+**Migrating from pre-3.0** (`Date | null | false`):
+
+```typescript
+// old
+const t = await client.ttl(k);
+if (t instanceof Date) use(t);
+else if (t === null) // no ttl
+else // missing
+
+// new (equivalent)
+const t = await client.ttl(k);
+if (t.state === "expires") use(t.at);
+else if (t.state === "no-ttl") // no ttl
+else // missing
 ```
 
 ---
@@ -333,6 +444,32 @@ const dotted = await client.keys("config.yaml"); // matches ONLY "config.yaml"
 
 ---
 
+#### `keysIter(pattern)`
+
+Iterates matching keys without materializing the full list. Prefer this over `keys()` for unbounded or unknown-sized scans.
+
+```typescript
+keysIter(pattern: string): AsyncIterable<string>
+```
+
+Ordering is not guaranteed across adapters — use `keys()` if you need sorted output.
+
+**Per-adapter behavior:**
+- Redis: wraps `SCAN` (non-blocking).
+- PostgreSQL: uses a server-side cursor (`DECLARE CURSOR`) inside a short transaction. Early break releases the cursor and commits.
+- Deno KV: direct `db.list()` pass-through.
+- Memory: yields from the internal `Map`.
+
+**Example:**
+
+```typescript
+for await (const k of client.keysIter("user:*")) {
+  if (someCondition(k)) break; // safe — cursor is released
+}
+```
+
+---
+
 #### `clear(pattern)`
 
 Deletes all keys matching a pattern.
@@ -364,32 +501,40 @@ const clearedAll = await client.clear("*"); // Clear everything
 
 ### Batch Operations
 
-#### `setMultiple(keyValuePairs, options?)`
+#### `setMultiple(entries, options?)`
 
 Stores multiple key-value pairs in a single batch operation.
 
 ```typescript
-setMultiple(keyValuePairs: [string, any][], options?: Partial<SetOptions>): Promise<boolean[]>
+setMultiple(
+  entries: [string, any][] | { key: string; value: any; ttl?: number }[],
+  options?: Partial<SetOptions>
+): Promise<boolean[]>
 ```
 
-More efficient than multiple individual `set` calls, especially for Redis and PostgreSQL.
+Accepts either the legacy tuple shape or an object shape that allows a **per-pair `ttl`** overriding `options.ttl`.
+
+More efficient than multiple individual `set` calls, especially for Redis, PostgreSQL, and Deno KV (the latter commits atomically).
 
 **Parameters:**
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `keyValuePairs` | `[string, any][]` | Array of `[key, value]` tuples to store. |
-| `options` | `Partial<SetOptions>` | Optional settings applied to all pairs (e.g., TTL). |
+| `entries` | `[string, any][]` or `{ key, value, ttl? }[]` | Pairs to store. |
+| `options` | `Partial<SetOptions>` | Fallback TTL used when a pair has no explicit `ttl`. |
 
-**Returns:** `Promise<boolean[]>` - Array of boolean results for each operation.
+**Returns:** `Promise<boolean[]>` — one per entry.
 
 **Example:**
 
 ```typescript
-await client.setMultiple([
-  ["user:1", { name: "Alice" }],
-  ["user:2", { name: "Bob" }],
-], { ttl: 3600 });
+await client.setMultiple(
+  [
+    ["user:1", { name: "Alice" }],           // uses options.ttl
+    { key: "user:2", value: { name: "Bob" }, ttl: 60 }, // overrides to 60s
+  ],
+  { ttl: 3600 }
+);
 ```
 
 ---
@@ -504,8 +649,51 @@ interface AdapterAbstractOptions {
   defaultTtl: number;
   /** Optional logger instance for debugging and error logging. */
   logger?: Logger;
+  /**
+   * When true (default), keys are validated on every operation:
+   * - non-empty string
+   * - no `\0` characters
+   * - total `namespace + key` length ≤ 512
+   * Set to false to opt out.
+   */
+  validateKeys?: boolean;
 }
 ```
+
+---
+
+### `TtlResult`
+
+```typescript
+type TtlResult =
+  | { state: "missing" }
+  | { state: "no-ttl" }
+  | { state: "expires"; at: Date };
+```
+
+Return shape of `ttl(key)`. See the `ttl()` method above.
+
+---
+
+### `SetMultipleEntry`
+
+```typescript
+type SetMultipleEntry =
+  | [string, any]
+  | { key: string; value: any; ttl?: number };
+```
+
+Input shape accepted by `setMultiple()`.
+
+---
+
+### `KvRaceError`
+
+```typescript
+class KvRaceError extends Error { /* ... */ }
+```
+
+Thrown by Deno KV-backed CAS primitives (`incr`, `decr`, `getSet`, `cas`) when the retry budget is exhausted due to contention. Configurable via the adapter's `atomicRetryAttempts` option.
 
 ---
 
@@ -615,16 +803,32 @@ interface AdapterDenoKvOptions extends AdapterAbstractOptions {
    * Deno.Kv instance obtained via `Deno.openKv()`.
    */
   db: Deno.Kv;
+
+  /**
+   * When true, `delete()` pre-checks the key's existence and returns the
+   * real "did it exist?" flag — at the cost of one extra round-trip.
+   * Default false preserves the Deno.Kv native always-true behavior.
+   */
+  strictDeleteResult?: boolean;
+
+  /**
+   * Max retry attempts for CAS-based primitives (incr/decr/getSet/cas)
+   * before throwing KvRaceError. Each retry adds exponential-with-jitter
+   * backoff capped at 50ms.
+   * @default 20
+   */
+  atomicRetryAttempts?: number;
 }
 ```
 
 **Limitations:**
 - Only works in Deno runtime
-- `delete()` always returns `true` (Deno.Kv limitation)
+- `delete()` always returns `true` by default (Deno.Kv limitation) — opt-in to strict behavior via `strictDeleteResult: true`
 - `expire()` is not supported (always returns `false`)
-- `ttl()` is not supported (always returns `null`)
+- `ttl()` returns `{ state: "no-ttl" }` for any existing key and `{ state: "missing" }` for absent ones — Deno.Kv cannot report the actual expiration
 - TTL can be set during `set()` but cannot be queried afterward
 - `transaction()` is atomic (via `Deno.Kv.atomic()`) **only** when the transaction contains no `get` operations — a mixed transaction falls back to sequential, non-atomic execution
+- `cas()` without `options.ttl` is best-effort TTL-preserving: Deno.Kv cannot read the current expiration, so any existing `expireIn` is cleared when the swap succeeds. Supply `options.ttl` explicitly if the key should remain bounded.
 
 ---
 

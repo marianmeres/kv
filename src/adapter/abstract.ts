@@ -30,6 +30,12 @@ export interface AdapterAbstractOptions extends Record<string, any> {
 	defaultTtl: number;
 	/** Optional logger instance for debugging and error logging. */
 	logger?: Logger;
+	/**
+	 * When `true` (default), keys are validated on every operation: must be
+	 * non-empty strings, no `\0` characters, and the total stored length
+	 * (namespace + key) must be ≤ 512. Set to `false` to skip validation.
+	 */
+	validateKeys?: boolean;
 }
 
 /**
@@ -44,6 +50,40 @@ export interface Operation {
 	value?: any;
 	/** Optional settings for the operation (only used for "set" operations). */
 	options?: Partial<SetOptions>;
+}
+
+/**
+ * Extended shape accepted by {@link AdapterAbstract.setMultiple}.
+ *
+ * The tuple form `[key, value]` is preserved for backward compatibility;
+ * the object form allows per-pair TTL that overrides `options.ttl`.
+ */
+export type SetMultipleEntry =
+	| [string, any]
+	| { key: string; value: any; ttl?: number };
+
+/**
+ * Result of a {@link AdapterAbstract.ttl} call.
+ *
+ * Discriminated union — switch on `.state`:
+ * - `"missing"` — key does not exist (or has expired)
+ * - `"no-ttl"` — key exists with no expiration
+ * - `"expires"` — key exists and will expire at `at`
+ */
+export type TtlResult =
+	| { state: "missing" }
+	| { state: "no-ttl" }
+	| { state: "expires"; at: Date };
+
+/**
+ * Thrown when a CAS-based atomic primitive (e.g. Deno KV `incr`/`cas`)
+ * exhausts its retry budget due to contention on the key.
+ */
+export class KvRaceError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "KvRaceError";
+	}
 }
 
 function notImplemented(): any {
@@ -70,6 +110,7 @@ export abstract class AdapterAbstract {
 
 	readonly options: AdapterAbstractOptions = {
 		defaultTtl: 0,
+		validateKeys: true,
 	};
 
 	protected _initialized: boolean = false;
@@ -108,6 +149,21 @@ export abstract class AdapterAbstract {
 	}
 
 	protected _withNs(key: string): string {
+		if (this.options.validateKeys !== false) {
+			if (typeof key !== "string" || key.length === 0) {
+				throw new TypeError("KV key must be a non-empty string");
+			}
+			if (key.includes("\0")) {
+				throw new TypeError("KV key must not contain null characters (\\0)");
+			}
+			if (this.namespace.length + key.length > 512) {
+				throw new RangeError(
+					`KV key exceeds 512-char limit (namespace + key = ${
+						this.namespace.length + key.length
+					})`
+				);
+			}
+		}
 		return this.namespace + key;
 	}
 
@@ -142,6 +198,17 @@ export abstract class AdapterAbstract {
 		const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&");
 		const body = escaped.replace(/\*/g, ".*").replace(/\?/g, ".");
 		return new RegExp(`^${body}$`);
+	}
+
+	/**
+	 * Normalizes the polymorphic `setMultiple` input to a single shape.
+	 */
+	protected _normalizePairs(
+		entries: readonly SetMultipleEntry[]
+	): Array<{ key: string; value: any; ttl?: number }> {
+		return entries.map((e) =>
+			Array.isArray(e) ? { key: e[0], value: e[1] } : e
+		);
 	}
 
 	/**
@@ -191,6 +258,81 @@ export abstract class AdapterAbstract {
 	}
 
 	/**
+	 * Stores a key-value pair only when the key does not already exist.
+	 *
+	 * @returns `true` if the value was stored, `false` if the key existed.
+	 */
+	setIfAbsent(
+		key: string,
+		value: any,
+		options?: Partial<SetOptions>
+	): Promise<boolean> {
+		return notImplemented();
+	}
+
+	/**
+	 * Atomically sets a new value and returns the previous one.
+	 *
+	 * @returns The previous value, or `null` if the key did not exist.
+	 */
+	getSet(
+		key: string,
+		value: any,
+		options?: Partial<SetOptions>
+	): Promise<any> {
+		return notImplemented();
+	}
+
+	/**
+	 * Atomically increments a numeric value.
+	 *
+	 * If the key does not exist, it is created with the value `by`.
+	 * If the key exists but is not a JSON number, throws `TypeError`.
+	 *
+	 * TTL semantics: `options.ttl` (or `defaultTtl`) is applied only when the
+	 * key is newly created by this call. Existing TTLs are preserved.
+	 *
+	 * @returns The new numeric value after the increment.
+	 * @throws {TypeError} If the stored value is not a number.
+	 */
+	incr(
+		key: string,
+		by?: number,
+		options?: Partial<SetOptions>
+	): Promise<number> {
+		return notImplemented();
+	}
+
+	/**
+	 * Atomically decrements a numeric value. See {@link incr} for details.
+	 */
+	decr(
+		key: string,
+		by?: number,
+		options?: Partial<SetOptions>
+	): Promise<number> {
+		return notImplemented();
+	}
+
+	/**
+	 * Atomic compare-and-set. Replaces the stored value with `next` only when
+	 * the currently-stored value deep-equals `expected`.
+	 *
+	 * Missing keys never match, even when `expected` is `null`.
+	 *
+	 * @returns `true` if the swap happened, `false` if the current value did
+	 * not match.
+	 */
+	cas(
+		key: string,
+		expected: any,
+		next: any,
+		options?: Partial<SetOptions>
+	): Promise<boolean> {
+		return notImplemented();
+	}
+
+	/**
 	 * Retrieves a value by its key.
 	 *
 	 * @param key - The key to retrieve.
@@ -213,7 +355,8 @@ export abstract class AdapterAbstract {
 	 *
 	 * @param key - The key to delete.
 	 * @returns A promise that resolves to `true` if the key existed and was deleted,
-	 *          `false` if the key didn't exist. Note: Deno KV always returns `true`.
+	 *          `false` if the key didn't exist. Note: Deno KV always returns `true` unless
+	 *          the adapter was created with `strictDeleteResult: true`.
 	 *
 	 * @example
 	 * ```typescript
@@ -264,6 +407,23 @@ export abstract class AdapterAbstract {
 	}
 
 	/**
+	 * Iterates matching keys without materializing the full list.
+	 *
+	 * Prefer this over {@link keys} for unbounded or unknown-sized scans.
+	 * Ordering is not guaranteed across adapters.
+	 *
+	 * @example
+	 * ```ts
+	 * for await (const k of client.keysIter("user:*")) {
+	 *   console.log(k);
+	 * }
+	 * ```
+	 */
+	keysIter(pattern: string): AsyncIterable<string> {
+		return notImplemented();
+	}
+
+	/**
 	 * Deletes all keys matching a pattern.
 	 *
 	 * Uses the same pattern syntax as {@link keys}.
@@ -286,24 +446,25 @@ export abstract class AdapterAbstract {
 	/**
 	 * Stores multiple key-value pairs in a single batch operation.
 	 *
-	 * More efficient than multiple individual `set` calls, especially for Redis and PostgreSQL.
+	 * Accepts either tuples `[key, value]` (legacy) or objects
+	 * `{ key, value, ttl? }`. Per-pair `ttl` overrides `options.ttl`.
 	 *
-	 * @param keyValuePairs - An array of `[key, value]` tuples to store.
-	 * @param options - Optional settings applied to all pairs (e.g., TTL).
-	 * @returns A promise that resolves to an array of boolean results for each operation.
+	 * @param entries - Pairs to store.
+	 * @param options - Optional batch-wide settings (TTL fallback).
+	 * @returns Array of boolean results (one per entry).
 	 *
 	 * @example
 	 * ```typescript
 	 * await client.setMultiple([
 	 *   ["user:1", { name: "Alice" }],
-	 *   ["user:2", { name: "Bob" }],
+	 *   { key: "user:2", value: { name: "Bob" }, ttl: 30 },
 	 * ], { ttl: 3600 });
 	 * ```
 	 */
 	setMultiple(
-		keyValuePairs: [string, any][],
+		entries: readonly SetMultipleEntry[],
 		options?: Partial<SetOptions>
-	): Promise<any[]> {
+	): Promise<boolean[]> {
 		return notImplemented();
 	}
 
@@ -368,28 +529,22 @@ export abstract class AdapterAbstract {
 	}
 
 	/**
-	 * Gets the expiration time of a key.
-	 *
-	 * @param key - The key to check.
-	 * @returns A promise that resolves to:
-	 *          - `Date` - The expiration date if TTL is set
-	 *          - `null` - If the key exists but has no expiration
-	 *          - `false` - If the key doesn't exist or has expired
-	 *          Note: Deno KV always returns `null` (TTL query not supported).
+	 * Gets the expiration time of a key as a discriminated union.
 	 *
 	 * @example
 	 * ```typescript
-	 * const expiry = await client.ttl("session:abc");
-	 * if (expiry instanceof Date) {
-	 *   console.log(`Expires at: ${expiry.toISOString()}`);
-	 * } else if (expiry === null) {
-	 *   console.log("No expiration set");
-	 * } else {
-	 *   console.log("Key does not exist");
+	 * const t = await client.ttl("session:abc");
+	 * switch (t.state) {
+	 *   case "expires": console.log(`expires at ${t.at.toISOString()}`); break;
+	 *   case "no-ttl":  console.log("no expiration"); break;
+	 *   case "missing": console.log("key not found"); break;
 	 * }
 	 * ```
+	 *
+	 * Note: Deno KV cannot report TTL state — always returns `{ state: "no-ttl" }`
+	 * for existing keys and `{ state: "missing" }` for absent ones.
 	 */
-	ttl(key: string): Promise<Date | null | false> {
+	ttl(key: string): Promise<TtlResult> {
 		return notImplemented();
 	}
 
@@ -420,7 +575,7 @@ export abstract class AdapterAbstract {
 	 * @internal
 	 */
 	__debug_dump(): Promise<
-		Record<string, { value: any; ttl: Date | null | false }>
+		Record<string, { value: any; ttl: Date | null }>
 	> {
 		return notImplemented();
 	}

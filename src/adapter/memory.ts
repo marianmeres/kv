@@ -9,7 +9,9 @@ import {
 	AdapterAbstract,
 	type AdapterAbstractOptions,
 	type Operation,
+	type SetMultipleEntry,
 	type SetOptions,
+	type TtlResult,
 } from "./abstract.ts";
 
 /**
@@ -53,6 +55,7 @@ export class AdapterMemory extends AdapterAbstract {
 		defaultTtl: 0, // no ttl by default
 		ttlCleanupIntervalSec: 0,
 		logger: createClog("KV/memory"),
+		validateKeys: true,
 	};
 
 	#store = new Map<string, string>();
@@ -115,59 +118,157 @@ export class AdapterMemory extends AdapterAbstract {
 		return false;
 	}
 
+	#applyTtl(nsKey: string, ttlSeconds: number | undefined) {
+		if (ttlSeconds) {
+			this.#expirations.set(nsKey, new Date(Date.now() + ttlSeconds * 1_000));
+		} else {
+			this.#expirations.delete(nsKey);
+		}
+	}
+
 	/** @inheritdoc */
-	override set(
+	override async set(
 		key: string,
 		value: any,
 		options: Partial<SetOptions> = {}
 	): Promise<boolean> {
 		this._assertInitialized();
-		key = this._withNs(key);
+		const nsKey = this._withNs(key);
 
 		// to be consistent across adapters, keeping internally the strigified version...
-		this.#store.set(key, JSON.stringify(value));
+		this.#store.set(nsKey, JSON.stringify(value));
+		this.#applyTtl(nsKey, this._resolveTtl(options));
 
-		const ttl = this._resolveTtl(options);
-		if (ttl) {
-			this.#expirations.set(key, new Date(Date.now() + ttl * 1_000));
-		} else {
-			this.#expirations.delete(key);
+		return true;
+	}
+
+	/** @inheritdoc */
+	override async setIfAbsent(
+		key: string,
+		value: any,
+		options: Partial<SetOptions> = {}
+	): Promise<boolean> {
+		this._assertInitialized();
+		const nsKey = this._withNs(key);
+
+		if (this.#store.has(nsKey) && !this.#isExpired(nsKey)) {
+			return false;
 		}
 
-		return Promise.resolve(true);
+		this.#store.set(nsKey, JSON.stringify(value));
+		this.#applyTtl(nsKey, this._resolveTtl(options));
+		return true;
 	}
 
 	/** @inheritdoc */
-	override get(key: string): Promise<any> {
+	override async getSet(
+		key: string,
+		value: any,
+		options: Partial<SetOptions> = {}
+	): Promise<any> {
 		this._assertInitialized();
-		key = this._withNs(key);
+		const previous = await this.get(key);
+		await this.set(key, value, options);
+		return previous;
+	}
 
-		if (this.#isExpired(key)) return Promise.resolve(null);
+	#incrBy(
+		key: string,
+		delta: number,
+		options: Partial<SetOptions> = {}
+	): number {
+		this._assertInitialized();
+		const nsKey = this._withNs(key);
 
-		const value = this.#store.get(key);
+		const existed = this.#store.has(nsKey) && !this.#isExpired(nsKey);
+		let current = 0;
+		if (existed) {
+			const raw = JSON.parse(this.#store.get(nsKey)!);
+			if (typeof raw !== "number") {
+				throw new TypeError("KV value is not a number");
+			}
+			current = raw;
+		}
+		const next = current + delta;
+		this.#store.set(nsKey, JSON.stringify(next));
+		// only set TTL when the key was newly created
+		if (!existed) this.#applyTtl(nsKey, this._resolveTtl(options));
+		return next;
+	}
+
+	/** @inheritdoc */
+	override async incr(
+		key: string,
+		by = 1,
+		options: Partial<SetOptions> = {}
+	): Promise<number> {
+		return this.#incrBy(key, by, options);
+	}
+
+	/** @inheritdoc */
+	override async decr(
+		key: string,
+		by = 1,
+		options: Partial<SetOptions> = {}
+	): Promise<number> {
+		return this.#incrBy(key, -by, options);
+	}
+
+	/** @inheritdoc */
+	override async cas(
+		key: string,
+		expected: any,
+		next: any,
+		options: Partial<SetOptions> = {}
+	): Promise<boolean> {
+		this._assertInitialized();
+		const nsKey = this._withNs(key);
+		if (!this.#store.has(nsKey) || this.#isExpired(nsKey)) {
+			return false;
+		}
+		const currentRaw = JSON.parse(this.#store.get(nsKey)!);
+		if (JSON.stringify(currentRaw) !== JSON.stringify(expected)) {
+			return false;
+		}
+		this.#store.set(nsKey, JSON.stringify(next));
+		// CAS preserves existing TTL unless options.ttl is provided
+		if (options.ttl !== undefined) {
+			this.#applyTtl(nsKey, this._resolveTtl(options));
+		}
+		return true;
+	}
+
+	/** @inheritdoc */
+	override async get(key: string): Promise<any> {
+		this._assertInitialized();
+		const nsKey = this._withNs(key);
+
+		if (this.#isExpired(nsKey)) return null;
+
+		const value = this.#store.get(nsKey);
 
 		// NOTE: even if the saved value was `undefined` it is always returned as `null`
-		if (value === undefined) return Promise.resolve(null);
+		if (value === undefined) return null;
 
-		return Promise.resolve(JSON.parse(value));
+		return JSON.parse(value);
 	}
 
 	/** @inheritdoc */
-	override delete(key: string): Promise<boolean> {
+	override async delete(key: string): Promise<boolean> {
 		this._assertInitialized();
-		key = this._withNs(key);
-		const existed = this.#store.has(key);
-		this.#store.delete(key);
-		this.#expirations.delete(key);
-		return Promise.resolve(existed);
+		const nsKey = this._withNs(key);
+		const existed = this.#store.has(nsKey);
+		this.#store.delete(nsKey);
+		this.#expirations.delete(nsKey);
+		return existed;
 	}
 
 	/** @inheritdoc */
-	override exists(key: string): Promise<boolean> {
+	override async exists(key: string): Promise<boolean> {
 		this._assertInitialized();
-		key = this._withNs(key);
-		if (this.#isExpired(key)) return Promise.resolve(false);
-		return Promise.resolve(this.#store.has(key));
+		const nsKey = this._withNs(key);
+		if (this.#isExpired(nsKey)) return false;
+		return this.#store.has(nsKey);
 	}
 
 	/** @inheritdoc */
@@ -175,11 +276,7 @@ export class AdapterMemory extends AdapterAbstract {
 		this._assertInitialized();
 		const all = Array.from(this.#store.keys())
 			.filter((key) => !this.#isExpired(key))
-			.map((k) => {
-				// strip namespace if exists
-				if (this.namespace) k = k.slice(this.namespace.length);
-				return k;
-			})
+			.map((k) => (this.namespace ? k.slice(this.namespace.length) : k))
 			.toSorted();
 
 		if (pattern === "*") return Promise.resolve(all);
@@ -189,15 +286,21 @@ export class AdapterMemory extends AdapterAbstract {
 	}
 
 	/** @inheritdoc */
+	override async *keysIter(pattern: string): AsyncIterable<string> {
+		const all = await this.keys(pattern);
+		for (const k of all) yield k;
+	}
+
+	/** @inheritdoc */
 	override async clear(pattern: string): Promise<number> {
 		this._assertInitialized();
 		const keysToDelete = await this.keys(pattern);
 		let deleteCount = 0;
 
-		for (let key of keysToDelete) {
-			key = this._withNs(key);
-			this.#store.delete(key);
-			this.#expirations.delete(key);
+		for (const key of keysToDelete) {
+			const nsKey = this.namespace + key;
+			this.#store.delete(nsKey);
+			this.#expirations.delete(nsKey);
 			deleteCount++;
 		}
 
@@ -206,14 +309,16 @@ export class AdapterMemory extends AdapterAbstract {
 
 	/** @inheritdoc */
 	override async setMultiple(
-		keyValuePairs: [string, any][],
+		entries: readonly SetMultipleEntry[],
 		options: Partial<SetOptions> = {}
 	): Promise<boolean[]> {
 		this._assertInitialized();
-		const results = [];
+		const normalized = this._normalizePairs(entries);
+		const results: boolean[] = [];
 
-		for (const [key, value] of keyValuePairs) {
-			await this.set(key, value, options);
+		for (const { key, value, ttl } of normalized) {
+			const opts = ttl !== undefined ? { ...options, ttl } : options;
+			await this.set(key, value, opts);
 			results.push(true);
 		}
 
@@ -233,36 +338,29 @@ export class AdapterMemory extends AdapterAbstract {
 	}
 
 	/** @inheritdoc */
-	override expire(key: string, ttl: number): Promise<boolean> {
+	override async expire(key: string, ttl: number): Promise<boolean> {
 		this._assertInitialized();
-		key = this._withNs(key);
+		const nsKey = this._withNs(key);
 
-		if (!this.#store.has(key) || this.#isExpired(key)) {
-			return Promise.resolve(false);
+		if (!this.#store.has(nsKey) || this.#isExpired(nsKey)) {
+			return false;
 		}
 
-		this.#expirations.set(key, new Date(Date.now() + ttl * 1000));
-		return Promise.resolve(true);
+		this.#expirations.set(nsKey, new Date(Date.now() + ttl * 1000));
+		return true;
 	}
 
 	/** @inheritdoc */
-	override ttl(key: string): Promise<Date | null | false> {
+	override async ttl(key: string): Promise<TtlResult> {
 		this._assertInitialized();
-		key = this._withNs(key);
+		const nsKey = this._withNs(key);
 
-		// Key doesn't exist
-		if (!this.#store.has(key)) return Promise.resolve(false);
+		if (!this.#store.has(nsKey)) return { state: "missing" };
+		if (this.#isExpired(nsKey)) return { state: "missing" };
 
-		// Key expired (and was cleaned up)
-		if (this.#isExpired(key)) return Promise.resolve(false);
-
-		const expiresAt = this.#expirations.get(key);
-		// No expiration set
-		if (!expiresAt) return Promise.resolve(null);
-
-		return Promise.resolve(expiresAt);
-		// const remaining = Math.max(0, expiresAt.valueOf() - Date.now());
-		// return Promise.resolve(new Date(Date.now() + Math.ceil(remaining)));
+		const expiresAt = this.#expirations.get(nsKey);
+		if (!expiresAt) return { state: "no-ttl" };
+		return { state: "expires", at: expiresAt };
 	}
 
 	/** @inheritdoc */
@@ -271,40 +369,36 @@ export class AdapterMemory extends AdapterAbstract {
 		// note: memory operations are atomic by nature
 		const results = [];
 
-		try {
-			for (const op of operations) {
-				switch (op.type) {
-					case "set":
-						results.push(await this.set(op.key, op.value, op.options || {}));
-						break;
-					case "get":
-						results.push(await this.get(op.key));
-						break;
-					case "delete":
-						results.push(await this.delete(op.key));
-						break;
-				}
+		for (const op of operations) {
+			switch (op.type) {
+				case "set":
+					results.push(await this.set(op.key, op.value, op.options || {}));
+					break;
+				case "get":
+					results.push(await this.get(op.key));
+					break;
+				case "delete":
+					results.push(await this.delete(op.key));
+					break;
 			}
-		} catch (err) {
-			// rollback here in a real db-based adapter
-			throw err;
 		}
 
 		return results;
 	}
 
 	override async __debug_dump(): Promise<
-		Record<string, { value: unknown; ttl: Date | null | false }>
+		Record<string, { value: unknown; ttl: Date | null }>
 	> {
 		this._assertInitialized();
-		const out: Record<string, { value: unknown; ttl: Date | null | false }> = {};
+		const out: Record<string, { value: unknown; ttl: Date | null }> = {};
 		for (let k of this.#store.keys()) {
 			// need to strip the namespace from the key
 			if (this.namespace) k = k.slice(this.namespace.length);
 
+			const t = await this.ttl(k);
 			out[k] = {
 				value: await this.get(k),
-				ttl: await this.ttl(k),
+				ttl: t.state === "expires" ? t.at : null,
 			};
 		}
 
