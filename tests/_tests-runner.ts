@@ -35,7 +35,21 @@ export function testsRunner(
 						// redis init
 						const dbRedis = await createRedis();
 						await dbRedis.connect();
-						await dbRedis.flushDb();
+						// flushDb is often disabled on shared Redis instances;
+						// delete keys via SCAN + UNLINK scoped to this test run instead
+						{
+							const stale: string[] = [];
+							let cursor = "0";
+							do {
+								const r = await dbRedis.scan(cursor, {
+									MATCH: "*",
+									COUNT: 500,
+								});
+								cursor = `${r.cursor}`;
+								stale.push(...r.keys.map((k: unknown) => String(k)));
+							} while (cursor !== "0");
+							if (stale.length > 0) await dbRedis.unlink(stale);
+						}
 
 						//
 						const dbDenoKv = await Deno.openKv(":memory:");

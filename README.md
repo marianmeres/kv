@@ -61,25 +61,82 @@ client.expire(key: string, ttl: number): Promise<boolean>
 client.ttl(key: string): Promise<Date | null | false>
 ```
 
+## Pattern Syntax
+
+`keys()` and `clear()` use Redis-style glob patterns:
+
+- `*` — match any number of characters
+- `?` — match exactly one character
+- all other characters (including `.`, `%`, `_`, `(`, `)`, `[`, `]`) are treated **literally**
+
+## Adapter Feature Matrix
+
+| Feature | Memory | Redis | PostgreSQL | Deno KV |
+|---|:-:|:-:|:-:|:-:|
+| Persistent | ✗ | ✓ | ✓ | ✓ |
+| TTL on `set()` | ✓ | ✓ | ✓ | ✓ |
+| `ttl()` query | ✓ | ✓ | ✓ | always `null` |
+| `expire()` | ✓ | ✓ | ✓ | always `false` |
+| Sorted `keys()` | ✓ | ✓ | ✓ | ✓ |
+| Atomic `transaction()` | ✓ (single-threaded) | ✓ (MULTI) | ✓ (BEGIN/COMMIT) | ✓ when no `get` ops |
+| `delete()` returns real existed-flag | ✓ | ✓ | ✓ | always `true` |
+| Background TTL cleanup | optional | native (Redis does it) | optional | native (Deno.Kv does it) |
+| `keys()` / `clear()` | ✓ | ✓ (non-cluster only) | ✓ | ✓ |
+
 ## Adapter-Specific Limitations
 
 ### Deno KV
 - **`delete()`**: Always returns `true`, even for non-existent keys (Deno.Kv limitation)
-- **`expire()`**: Not supported - always returns `false`
-- **`ttl()`**: Not supported - always returns `null`
-- **Note**: TTL can be set during `set()` operation, but cannot be queried or modified after
+- **`expire()`**: Not supported — always returns `false`
+- **`ttl()`**: Not supported — always returns `null`
+- **`transaction()`**: Atomic via `Deno.Kv.atomic()` **only** when the transaction contains no `get` operations. A transaction that mixes `get` with `set`/`delete` falls back to sequential (non-atomic) execution.
+- **Note**: TTL can be set during `set()`, but cannot be queried or modified after.
 
 ### Redis
 - **`keys()` and `clear()`**: Not supported in cluster mode (throws error)
 - **Namespace**: Required (cannot be empty string)
+- **Connection ownership**: If you pass a not-yet-open client to the adapter, `initialize()` opens it and `destroy()` closes it. If you pass an already-open client, the adapter leaves the connection lifecycle to you — safe to share a single client across adapters with different namespaces.
 
 ### PostgreSQL
-- Creates a table (default: `__kv`) in your database
-- Supports optional TTL cleanup via `ttlCleanupIntervalSec` option
+- Creates a table (default: `__kv`) in your database.
+- `tableName` must match `^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$` (word chars plus an optional `schema.` prefix).
+- `transaction()` pins a single connection from the Pool for the whole BEGIN/…/COMMIT block — safe to call against a `pg.Pool`.
+- Supports optional TTL cleanup via `ttlCleanupIntervalSec` option.
 
 ### Memory
-- Data is not persisted (in-memory only)
-- Supports optional TTL cleanup via `ttlCleanupIntervalSec` option
+- Data is not persisted (in-memory only).
+- Supports optional TTL cleanup via `ttlCleanupIntervalSec` option.
+
+## Breaking Changes (2.0.0)
+
+This release fixes several correctness bugs. Most fixes are behavior-preserving,
+but a few change semantics in ways that could affect existing code:
+
+- **`set(key, value, { ttl: 0 })` now explicitly disables expiration for the
+  call, overriding any non-zero `defaultTtl`.** Before: `ttl: 0` was silently
+  ignored and `defaultTtl` was used. If you relied on the old behavior, omit
+  the `ttl` option instead of passing `0`.
+- **Redis adapter: `destroy()` now closes connections that `initialize()` opened.**
+  Connections that were already open when you passed them to the adapter remain
+  under your control (unchanged). If your test harness used to close the
+  underlying client twice, remove the redundant close.
+- **Redis adapter: `__debug_dump()` is scoped to the adapter's namespace.**
+  Before: it dumped every key in the selected DB (across tenants). After:
+  only keys under this adapter's namespace.
+- **`getMultiple()` preserves stored falsy values (`false`, `0`, `""`, `null`).**
+  Before: all of these were coerced to `null`, indistinguishable from "key
+  missing". After: stored falsy values round-trip; only missing keys map to
+  `null`.
+- **Deno KV: `exists(key)` returns `true` when the stored value is `null`.**
+  Before: `null` values were reported as non-existent.
+- **Deno KV: `keys()` is sorted.**
+- **`keys()` and `clear()` now treat non-wildcard regex/LIKE metacharacters
+  as literals.** Before: Memory/Deno KV adapters leaked `.`/`(`/`[` through to
+  regex, and the PostgreSQL adapter leaked `%`/`_` through to LIKE. After:
+  only `*` and `?` are wildcards; everything else matches literally.
+- **PostgreSQL: `tableName` is validated.** Invalid names (anything outside
+  `[A-Za-z0-9_.]`) now throw in the constructor instead of producing confusing
+  SQL errors at runtime.
 
 ## Full API Reference
 

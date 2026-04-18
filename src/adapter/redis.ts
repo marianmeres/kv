@@ -79,22 +79,53 @@ export class AdapterRedis extends AdapterAbstract {
 		}
 	}
 
+	#errorListener: ((err: unknown) => void) | undefined;
+	#weOpened = false;
+
 	/** @inheritdoc */
 	override async initialize(): Promise<void> {
 		const { db, logger } = this.options;
 
-		db.on("error", (err) => logger?.error?.(err));
+		// avoid stacking listeners across repeated initialize() calls
+		if (this.#errorListener) {
+			db.off?.("error", this.#errorListener);
+		}
+		this.#errorListener = (err) => logger?.error?.(err);
+		db.on("error", this.#errorListener);
 
 		// the pool instance doesn't have connect, so being defensive...
-		if (!db.isOpen) await db?.connect();
+		if (!db.isOpen) {
+			await db?.connect();
+			this.#weOpened = true;
+		}
 
 		this._initialized = true;
 	}
 
 	/** @inheritdoc */
-	override destroy(_hard?: boolean): Promise<void> {
+	override async destroy(_hard?: boolean): Promise<void> {
 		this._initialized = false;
-		return Promise.resolve();
+		const { db } = this.options;
+
+		if (this.#errorListener) {
+			db.off?.("error", this.#errorListener);
+			this.#errorListener = undefined;
+		}
+
+		// Only close a connection we opened ourselves — if the caller opened the
+		// client before passing it in, they own the lifecycle. `quit` is the
+		// graceful path; it is missing on the pool, so be defensive.
+		if (this.#weOpened && db?.isOpen) {
+			const quit = (db as any).quit ?? (db as any).close;
+			if (typeof quit === "function") {
+				try {
+					await quit.call(db);
+				} catch {
+					// ignore — caller may have already closed it
+				}
+			}
+			this.#weOpened = false;
+		}
 	}
 
 	/** @inheritdoc */
@@ -107,12 +138,12 @@ export class AdapterRedis extends AdapterAbstract {
 		key = this._withNs(key);
 
 		const { db } = this.options;
-		const ttl = options.ttl || this.options.defaultTtl || undefined;
+		const ttl = this._resolveTtl(options);
 
 		if (value === undefined) value = null; // redis does not accept undefined
 		value = JSON.stringify(value);
 
-		const r = await db.set(key, value, { EX: ttl });
+		const r = await db.set(key, value, ttl ? { EX: ttl } : {});
 
 		return r === "OK";
 	}
@@ -209,12 +240,12 @@ export class AdapterRedis extends AdapterAbstract {
 		this._assertInitialized();
 
 		const { db } = this.options;
-		const ttl = options.ttl || this.options.defaultTtl || undefined;
+		const ttl = this._resolveTtl(options);
 		const pipeline = db.multi();
 
 		for (let [key, value] of keyValuePairs) {
 			key = this._withNs(key);
-			pipeline.set(key, JSON.stringify(value), { EX: ttl });
+			pipeline.set(key, JSON.stringify(value), ttl ? { EX: ttl } : {});
 		}
 
 		const res = await pipeline.exec();
@@ -281,9 +312,16 @@ export class AdapterRedis extends AdapterAbstract {
 		for (const op of operations) {
 			const key = this._withNs(op.key);
 			switch (op.type) {
-				case "set":
-					multi.set(key, JSON.stringify(op.value));
+				case "set": {
+					const ttl = this._resolveTtl(op.options);
+					const val = op.value === undefined ? null : op.value;
+					multi.set(
+						key,
+						JSON.stringify(val),
+						ttl ? { EX: ttl } : {}
+					);
 					break;
+				}
 				case "get":
 					multi.get(key);
 					break;
@@ -325,12 +363,19 @@ export class AdapterRedis extends AdapterAbstract {
 		this._assertInitialized();
 		const { db } = this.options;
 
-		const keys = (await db.keys("*")).toSorted();
+		// SCAN scoped to this namespace — do not touch foreign tenants
+		const match = this.namespace + "*";
+		const nsKeys: string[] = [];
+		let cursor = "0";
+		do {
+			const r = await db.scan(cursor, { MATCH: match, COUNT: 500 });
+			cursor = `${r.cursor}`;
+			nsKeys.push(...r.keys.map((k: unknown) => String(k)));
+		} while (cursor !== "0");
 
+		const keys = nsKeys.map((k) => this._withoutNs(k)).toSorted();
 		const out: Record<string, { value: unknown; ttl: Date | null | false }> = {};
-
-		for (const _key of keys) {
-			const key = this._withoutNs(String(_key));
+		for (const key of keys) {
 			out[key] = {
 				value: await this.get(key),
 				ttl: await this.ttl(key),

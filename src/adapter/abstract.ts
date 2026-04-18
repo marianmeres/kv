@@ -87,7 +87,10 @@ export abstract class AdapterAbstract {
 		options: Partial<AdapterAbstractOptions> = {}
 	) {
 		this.options = { ...this.options, ...(options || {}) };
-		this._assertValidNamespace();
+		// NOTE: subclasses re-declare `namespace` with a field initializer, so
+		// validation runs in each subclass constructor AFTER `super()` completes.
+		// Calling `_assertValidNamespace()` here would see the base default (empty)
+		// and provide no safety.
 	}
 
 	protected _assertInitialized() {
@@ -111,6 +114,34 @@ export abstract class AdapterAbstract {
 	protected _withoutNs(key: string): string {
 		if (this.namespace) key = key.slice(this.namespace.length);
 		return key;
+	}
+
+	/**
+	 * Resolves the effective TTL (in seconds) for a set operation.
+	 *
+	 * Uses `options.ttl` when provided, otherwise falls back to `defaultTtl`.
+	 * Non-positive values (0 or less) mean "no expiration" and return `undefined`.
+	 *
+	 * Note: `{ ttl: 0 }` explicitly overrides a non-zero `defaultTtl` to mean
+	 * "no expiration for this call".
+	 */
+	protected _resolveTtl(opts?: Partial<SetOptions>): number | undefined {
+		const raw = opts?.ttl ?? this.options.defaultTtl;
+		return raw && raw > 0 ? raw : undefined;
+	}
+
+	/**
+	 * Converts a Redis-style glob pattern to a regular expression.
+	 * Escapes regex metacharacters before translating `*`/`?`.
+	 *
+	 * Glob syntax: `*` matches any chars, `?` matches a single char.
+	 * All other characters — including `.`, `(`, `)`, `[`, `]`, `+` — are
+	 * matched literally.
+	 */
+	protected _globToRegex(pattern: string): RegExp {
+		const escaped = pattern.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+		const body = escaped.replace(/\*/g, ".*").replace(/\?/g, ".");
+		return new RegExp(`^${body}$`);
 	}
 
 	/**

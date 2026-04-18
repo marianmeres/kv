@@ -127,7 +127,7 @@ export class AdapterMemory extends AdapterAbstract {
 		// to be consistent across adapters, keeping internally the strigified version...
 		this.#store.set(key, JSON.stringify(value));
 
-		const ttl = options.ttl || this.options.defaultTtl;
+		const ttl = this._resolveTtl(options);
 		if (ttl) {
 			this.#expirations.set(key, new Date(Date.now() + ttl * 1_000));
 		} else {
@@ -149,7 +149,7 @@ export class AdapterMemory extends AdapterAbstract {
 		// NOTE: even if the saved value was `undefined` it is always returned as `null`
 		if (value === undefined) return Promise.resolve(null);
 
-		return JSON.parse(value);
+		return Promise.resolve(JSON.parse(value));
 	}
 
 	/** @inheritdoc */
@@ -184,10 +184,7 @@ export class AdapterMemory extends AdapterAbstract {
 
 		if (pattern === "*") return Promise.resolve(all);
 
-		// convert Redis-style pattern to regex
-		const regexPattern = pattern.replace(/\*/g, ".*").replace(/\?/g, ".");
-		const regex = new RegExp(`^${regexPattern}$`);
-
+		const regex = this._globToRegex(pattern);
 		return Promise.resolve(all.filter((key) => regex.test(key)));
 	}
 

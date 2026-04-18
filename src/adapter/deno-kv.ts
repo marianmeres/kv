@@ -95,7 +95,7 @@ export class AdapterDenoKv extends AdapterAbstract {
 	): Promise<boolean> {
 		this._assertInitialized();
 		const { db } = this.options;
-		const ttl = options.ttl || this.options.defaultTtl || undefined;
+		const ttl = this._resolveTtl(options);
 
 		if (value === undefined) value = null;
 		// Deno.Kv does not require this, but for the consistency with other adapters
@@ -129,7 +129,11 @@ export class AdapterDenoKv extends AdapterAbstract {
 	/** @inheritdoc */
 	override async exists(key: string): Promise<boolean> {
 		this._assertInitialized();
-		return null !== (await this.get(key));
+		const { db } = this.options;
+		// Deno.Kv returns an entry with `versionstamp: null` for missing keys,
+		// and a non-null versionstamp for present keys — even if the stored value is null.
+		const entry = await db.get(this.#denoKvKey(key));
+		return entry?.versionstamp !== null && entry?.versionstamp !== undefined;
 	}
 
 	/** @inheritdoc */
@@ -145,25 +149,30 @@ export class AdapterDenoKv extends AdapterAbstract {
 		this._assertInitialized();
 		const { db } = this.options;
 
-		const [prefix, search] = this.#denoKvKey(pattern, false);
-		// convert Redis-style pattern to regex
-		const regexPattern = pattern.replace(/\*/g, ".*").replace(/\?/g, ".");
-		const regex = new RegExp(`^${regexPattern}$`);
+		const [firstSeg] = this.#denoKvKey(pattern, false);
+		const regex = this._globToRegex(pattern);
 
-		const iter = db.list({
-			prefix: [this.namespace, prefix === "*" ? undefined : prefix].filter(
-				Boolean
-			) as string[],
-		});
-		const out = [];
+		// Only use the first key segment as a Deno.Kv prefix if it contains
+		// no wildcards — otherwise we must scan the whole namespace and rely
+		// on regex filtering.
+		const firstIsLiteral =
+			firstSeg !== undefined && firstSeg !== "*" && !/[*?]/.test(firstSeg);
+
+		const listPrefix = firstIsLiteral
+			? [this.namespace, firstSeg]
+			: [this.namespace];
+
+		const iter = db.list({ prefix: listPrefix });
+		const out: string[] = [];
 		for await (const res of iter) {
-			// note: here we have full data available, not just keys, so this is pure waste
+			// We must iterate entries (Deno.Kv has no keys-only API), but we
+			// deliberately do not touch `res.value` — no JSON parse, no copy.
 			const key = res.key.slice(1).join(":");
-			if (prefix === "*" || search === "*" || regex.test(key)) {
+			if (pattern === "*" || regex.test(key)) {
 				out.push(key);
 			}
 		}
-		return out;
+		return out.toSorted();
 	}
 
 	/** @inheritdoc */
@@ -186,14 +195,21 @@ export class AdapterDenoKv extends AdapterAbstract {
 		options: Partial<SetOptions> = {}
 	): Promise<boolean[]> {
 		this._assertInitialized();
-		const results = [];
+		if (keyValuePairs.length === 0) return [];
 
+		const { db } = this.options;
+		const ttl = this._resolveTtl(options);
+		const expireIn = ttl ? ttl * 1000 : undefined;
+
+		// batch into a single atomic commit (all-or-nothing)
+		const atomic = db.atomic();
 		for (const [key, value] of keyValuePairs) {
-			await this.set(key, value, options);
-			results.push(true);
+			const v = value === undefined ? null : value;
+			atomic.set(this.#denoKvKey(key), JSON.stringify(v), { expireIn });
 		}
-
-		return results;
+		const res = await atomic.commit();
+		const ok = !!res?.ok;
+		return keyValuePairs.map(() => ok);
 	}
 
 	/** @inheritdoc */
@@ -215,30 +231,49 @@ export class AdapterDenoKv extends AdapterAbstract {
 	/** @inheritdoc */
 	override async transaction(operations: Operation[]): Promise<any[]> {
 		this._assertInitialized();
+		const { db } = this.options;
 
-		// Note: This implementation does not use Deno.Kv's atomic feature
-		// Operations are executed sequentially
-		const results = [];
+		// When the transaction contains only set/delete ops we can use Deno.Kv's
+		// native atomic() for true all-or-nothing semantics. A `get` inside the
+		// transaction breaks that — Deno.Kv has no atomic-read — so in that case
+		// we fall back to sequential execution (consistent with pre-existing
+		// behavior).
+		const hasGet = operations.some((op) => op.type === "get");
 
-		try {
+		if (!hasGet && operations.length > 0) {
+			const atomic = db.atomic();
 			for (const op of operations) {
-				switch (op.type) {
-					case "set":
-						results.push(await this.set(op.key, op.value, op.options || {}));
-						break;
-					case "get":
-						results.push(await this.get(op.key));
-						break;
-					case "delete":
-						results.push(await this.delete(op.key));
-						break;
+				if (op.type === "set") {
+					const ttl = this._resolveTtl(op.options);
+					const v = op.value === undefined ? null : op.value;
+					atomic.set(this.#denoKvKey(op.key), JSON.stringify(v), {
+						expireIn: ttl ? ttl * 1000 : undefined,
+					});
+				} else if (op.type === "delete") {
+					atomic.delete(this.#denoKvKey(op.key));
 				}
 			}
-		} catch (err) {
-			// rollback here in a real db-based adapter
-			throw err;
+			const res = await atomic.commit();
+			const ok = !!res?.ok;
+			if (!ok) throw new Error("Deno.Kv atomic transaction failed to commit");
+			return operations.map(() => true);
 		}
 
+		// Sequential fallback — operations are NOT atomic.
+		const results: any[] = [];
+		for (const op of operations) {
+			switch (op.type) {
+				case "set":
+					results.push(await this.set(op.key, op.value, op.options || {}));
+					break;
+				case "get":
+					results.push(await this.get(op.key));
+					break;
+				case "delete":
+					results.push(await this.delete(op.key));
+					break;
+			}
+		}
 		return results;
 	}
 

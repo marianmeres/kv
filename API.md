@@ -149,11 +149,18 @@ Values are automatically serialized to JSON. If the key already exists, it will 
 
 **Returns:** `Promise<boolean>` - `true` if the operation was successful.
 
+**TTL resolution:**
+
+- If `options.ttl` is omitted, the adapter's `defaultTtl` is used.
+- If `options.ttl` is a positive number, it overrides `defaultTtl` for this call.
+- If `options.ttl` is `0` or negative, **no expiration** is applied — this explicitly overrides a non-zero `defaultTtl`.
+
 **Example:**
 
 ```typescript
 await client.set("user:123", { name: "John" });
 await client.set("session:abc", { token: "xyz" }, { ttl: 3600 }); // expires in 1 hour
+await client.set("pinned", 1, { ttl: 0 }); // never expires, even if defaultTtl > 0
 ```
 
 ---
@@ -220,6 +227,8 @@ exists(key: string): Promise<boolean>
 | `key` | `string` | The key to check. |
 
 **Returns:** `Promise<boolean>` - `true` if the key exists and hasn't expired.
+
+> A key with a stored value of `null` is considered to exist. `exists()` only returns `false` when the key is missing or has expired.
 
 ---
 
@@ -300,6 +309,7 @@ keys(pattern: string): Promise<string[]>
 Uses Redis-style wildcard patterns:
 - `*` matches any number of characters
 - `?` matches exactly one character
+- **Every other character is a literal match**, including regex metacharacters (`.`, `(`, `[`, `+`, `^`, `$`, `|`) and SQL LIKE metacharacters (`%`, `_`, `\`).
 
 **Parameters:**
 
@@ -316,6 +326,9 @@ Uses Redis-style wildcard patterns:
 ```typescript
 const userKeys = await client.keys("user:*");
 const allKeys = await client.keys("*");
+
+// literal dot, not "any char"
+const dotted = await client.keys("config.yaml"); // matches ONLY "config.yaml"
 ```
 
 ---
@@ -397,13 +410,16 @@ More efficient than multiple individual `get` calls.
 |-----------|------|-------------|
 | `keys` | `string[]` | Array of keys to retrieve. |
 
-**Returns:** `Promise<Record<string, any>>` - Object mapping keys to their values. Missing or expired keys will have a value of `null`.
+**Returns:** `Promise<Record<string, any>>` - Object mapping keys to their values. Only **missing** or expired keys are reported as `null`; stored falsy values (`false`, `0`, `""`, `null`) are returned verbatim.
 
 **Example:**
 
 ```typescript
-const users = await client.getMultiple(["user:1", "user:2", "user:3"]);
-// { "user:1": { name: "Alice" }, "user:2": null, "user:3": { name: "Charlie" } }
+await client.set("flag", false);
+await client.set("count", 0);
+
+const got = await client.getMultiple(["flag", "count", "missing"]);
+// { flag: false, count: 0, missing: null }
 ```
 
 ---
@@ -418,7 +434,16 @@ Executes multiple operations within a single transaction.
 transaction(operations: Operation[]): Promise<any[]>
 ```
 
-For adapters that support it (Redis, PostgreSQL), operations are atomic. For memory and Deno KV, operations are executed sequentially.
+Atomicity per adapter:
+
+| Adapter | Atomic | Notes |
+|---------|:-:|---|
+| Memory | ✓ | Single-threaded by nature |
+| Redis | ✓ | Uses `MULTI`/`EXEC` |
+| PostgreSQL | ✓ | Pins a single connection for `BEGIN`/…/`COMMIT`, even on a `pg.Pool` |
+| Deno KV | Conditional | Atomic via `Deno.Kv.atomic()` when the transaction contains **no** `get` ops; falls back to sequential (non-atomic) when a `get` is present (Deno.Kv has no atomic-read) |
+
+Per-operation `options.ttl` is honored by **all** adapters (Redis, PostgreSQL, Memory, Deno KV).
 
 **Parameters:**
 
@@ -432,7 +457,7 @@ For adapters that support it (Redis, PostgreSQL), operations are atomic. For mem
 
 ```typescript
 const results = await client.transaction([
-  { type: "set", key: "counter", value: 1 },
+  { type: "set", key: "counter", value: 1, options: { ttl: 60 } },
   { type: "get", key: "counter" },
   { type: "delete", key: "old:key" },
 ]);
@@ -539,6 +564,12 @@ interface AdapterRedisOptions extends AdapterAbstractOptions {
 
 **Important:** Namespace is required for Redis adapter (cannot be empty string).
 
+**Connection ownership:**
+
+- If the client passed via `db` is **not yet open** when `initialize()` runs, the adapter connects it **and** will close it on `destroy()`.
+- If the client is **already open** when `initialize()` runs, the adapter leaves the connection untouched on `destroy()` — the caller owns the lifecycle. This is the path for sharing one client across multiple adapters with different namespaces.
+- `initialize()` is idempotent — repeated calls do not stack `error` listeners.
+
 ---
 
 ### `AdapterPostgresOptions`
@@ -550,6 +581,9 @@ interface AdapterPostgresOptions extends AdapterAbstractOptions {
   /**
    * Name of the table to use for storing key-value pairs.
    * The table will be created automatically if it doesn't exist.
+   * May be prefixed with a schema, e.g. "public.kv".
+   * Must match `^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$`
+   * (word characters, optionally with one `schema.` prefix).
    * @default "__kv"
    */
   tableName: string;
@@ -560,6 +594,9 @@ interface AdapterPostgresOptions extends AdapterAbstractOptions {
   ttlCleanupIntervalSec: number;
 }
 ```
+
+**Transactions on a Pool:**
+`transaction()` checks out a single client from the pool (via `pool.connect()`) for the entire `BEGIN`/`COMMIT`/`ROLLBACK` block, so atomicity holds even when multiple transactions run concurrently against the same `pg.Pool`. On a `pg.Client`, no checkout happens.
 
 **Table Schema:**
 - `key` (VARCHAR 512) - Primary key
@@ -587,6 +624,7 @@ interface AdapterDenoKvOptions extends AdapterAbstractOptions {
 - `expire()` is not supported (always returns `false`)
 - `ttl()` is not supported (always returns `null`)
 - TTL can be set during `set()` but cannot be queried afterward
+- `transaction()` is atomic (via `Deno.Kv.atomic()`) **only** when the transaction contains no `get` operations — a mixed transaction falls back to sequential, non-atomic execution
 
 ---
 

@@ -1,1 +1,2 @@
-Key-value storage abstraction layer providing a unified Redis-inspired API across memory, Redis, PostgreSQL, and Deno KV backends.
+Key-value storage abstraction layer providing a unified Redis-inspired API across 
+memory, Redis, PostgreSQL, and Deno KV backends.

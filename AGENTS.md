@@ -6,7 +6,7 @@ Machine-friendly reference for AI agents working with this codebase.
 
 - **Stack**: TypeScript, Deno (primary), Node.js (via npm build)
 - **Run**: `deno task test` | **Build**: `deno task npm:build`
-- **Version**: 1.3.1
+- **Version**: 2.0.0
 
 ## Purpose
 
@@ -36,10 +36,14 @@ tests/
 
 ## Critical Conventions
 
-1. Namespace must end with `:` or be empty string
-2. Values are JSON-stringified internally
-3. TTL is in seconds; stored as absolute Date internally
-4. Pattern matching: Redis-style (`*` = any chars, `?` = single char)
+1. Namespace must end with `:` or be empty string.
+2. Values are JSON-stringified internally.
+3. TTL is in seconds; stored as absolute `Date` internally.
+4. Pattern matching: Redis-style (`*` = any chars, `?` = single char). All other characters — including `.`, `(`, `[`, `%`, `_` — are matched **literally**.
+5. TTL resolution: `options.ttl ?? defaultTtl`; `0` or negative disables expiration for that call (explicitly overrides `defaultTtl`).
+6. All pattern-to-regex / pattern-to-LIKE conversion lives in `abstract.ts` — use `_globToRegex()` and `_resolveTtl()` helpers; do not re-implement per-adapter.
+7. Postgres `transaction()` must pin a single connection via `pool.connect()`; every nested query uses that client, not `this.options.db`.
+8. Redis adapter owns the connection iff `initialize()` opened it (`#weOpened` flag).
 
 ## Before Making Changes
 
@@ -53,8 +57,8 @@ tests/
 |---------|-------------|------------------|-------------|
 | Memory | `"memory"` | None | Not persisted |
 | Redis | `"redis"` | `db` (Redis client) | Namespace required; `keys()`/`clear()` unavailable in cluster mode |
-| PostgreSQL | `"postgres"` | `db` (pg.Pool/Client) | None |
-| Deno KV | `"deno-kv"` | `db` (Deno.Kv) | Deno runtime only; `delete()` always true; `expire()`/`ttl()` not supported |
+| PostgreSQL | `"postgres"` | `db` (pg.Pool/Client) | `tableName` limited to `[A-Za-z0-9_]` + optional `schema.` prefix |
+| Deno KV | `"deno-kv"` | `db` (Deno.Kv) | Deno runtime only; `delete()` always `true`; `expire()`/`ttl()` unsupported; `transaction()` atomic only when no `get` ops |
 
 ## Core API
 
