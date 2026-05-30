@@ -1,6 +1,6 @@
 {
   "name": "@marianmeres/kv",
-  "version": "2.3.1",
+  "version": "2.4.0",
   "exports": "./src/mod.ts",
   "tasks": {
     "test": "deno test --unstable-kv -A --env-file",
