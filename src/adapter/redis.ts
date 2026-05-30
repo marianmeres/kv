@@ -4,7 +4,7 @@
  * Redis key-value storage adapter implementation.
  */
 
-import type { createClient, createClientPool } from "redis";
+import type { RedisClientPoolType, RedisClientType } from "redis";
 import {
 	AdapterAbstract,
 	type AdapterAbstractOptions,
@@ -22,8 +22,13 @@ export interface AdapterRedisOptions extends AdapterAbstractOptions {
 	/**
 	 * Redis client instance created via `createClient()` or `createClientPool()`.
 	 * Pool support is experimental and not fully tested.
+	 *
+	 * Typed with wide generics so any RESP version (RESP3 default, or the
+	 * `createClient({ RESP: 2 })` v5-compat opt-in) and any module set is accepted.
 	 */
-	db: ReturnType<typeof createClient> | ReturnType<typeof createClientPool>;
+	db:
+		| RedisClientType<any, any, any, any, any>
+		| RedisClientPoolType<any, any, any, any, any>;
 	/**
 	 * Set to `true` if connecting to a Redis Cluster.
 	 * Note: `keys()` and `clear()` operations are not supported in cluster mode.
