@@ -33,7 +33,8 @@ tests/
 ├── _tests-runner.ts    — Test harness: builds one client per adapter per test
 ├── _redis.ts           — Redis test helper
 ├── _pg.ts              — PostgreSQL test helper
-└── _sqlite.ts          — SQLite test helper (fresh `:memory:` database per test)
+├── _sqlite.ts          — SQLite test helper (fresh `:memory:` database per test)
+└── _no-destroy-child.ts — child process: an adapter left running must not hold it open
 
 dist/                   — `tsc -p tsconfig.build.json` output; gitignored; the npm payload
 ```
@@ -70,6 +71,7 @@ dist/                   — `tsc -p tsconfig.build.json` output; gitignored; the
 18. SQLite: `src/` imports `node:sqlite` **type-only** — the caller passes the `DatabaseSync`. A runtime import would make every consumer of the package load `node:sqlite`.
 19. SQLite multi-statement operations go through `#atomic()`: `BEGIN IMMEDIATE`, or a savepoint when `db.isTransaction` (the caller's transaction on the same handle). The callback must stay synchronous — an `await` inside would let other work join the transaction.
 20. SQLite stores `value` as JSON text and `expires_at` as epoch ms (INTEGER), compared against a bound `Date.now()` — never SQLite's own clock. Read counts/integers through `Number()` (a handle opened with `readBigInts` returns bigints).
+21. TTL cleanup timers are `unref()`ed (`unref?.()`: browser and worker timers are plain numbers), so a client nobody destroyed cannot hold the process open; `destroy()` still clears them. Postgres's tick awaits its query, so it re-checks `_initialized` before re-arming, and `destroy()` clears `_initialized` before its first `await`. SQLite stops the cleanup (one error log) when it finds `db.isOpen` false.
 
 ## Before Making Changes
 

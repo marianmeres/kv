@@ -22,6 +22,7 @@ export interface AdapterMemoryOptions extends AdapterAbstractOptions {
 	 * Interval in seconds for automatic cleanup of expired keys.
 	 * Set to 0 to disable automatic cleanup (expired keys will still be
 	 * lazily removed on access).
+	 * The timer never keeps the process alive; `destroy()` stops it.
 	 */
 	ttlCleanupIntervalSec: number;
 }
@@ -98,6 +99,9 @@ export class AdapterMemory extends AdapterAbstract {
 				this.#maybeTTLCleanup.bind(this),
 				this.options.ttlCleanupIntervalSec * 1000,
 			);
+			// housekeeping must not hold the process open; destroy() still clears it
+			// (`?.`: browser and worker timers are plain numbers)
+			this.#cleanupTimer.unref?.();
 		}
 	}
 

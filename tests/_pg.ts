@@ -9,12 +9,13 @@ const { PG_HOST, PG_DATABASE, PG_USER, PG_PASSWORD, PG_PORT } = {
 	PG_PORT: process.env.TEST_PG_PORT || "5432",
 };
 
-export function createPg() {
+export function createPg(config: pg.PoolConfig = {}) {
 	return new pg.Pool({
 		host: PG_HOST,
 		user: PG_USER,
 		database: PG_DATABASE,
 		password: PG_PASSWORD,
 		port: parseInt(PG_PORT, 10),
+		...config,
 	});
 }

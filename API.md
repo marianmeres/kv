@@ -107,6 +107,9 @@ destroy(hard?: boolean): Promise<void>
 | --------- | --------- | ------- | --------------------------------------------------------------------------------- |
 | `hard`    | `boolean` | `false` | If `true`, performs a hard cleanup (e.g., drops tables in PostgreSQL and SQLite). |
 
+Stops the TTL cleanup timer (`ttlCleanupIntervalSec`). That timer never keeps the process
+alive on its own, so a short-lived script that skips `destroy()` still exits.
+
 ---
 
 #### `info()`
@@ -715,6 +718,7 @@ interface AdapterMemoryOptions extends AdapterAbstractOptions {
 	 * Interval in seconds for automatic cleanup of expired keys.
 	 * Set to 0 to disable automatic cleanup (expired keys will still be
 	 * lazily removed on access).
+	 * The timer never keeps the process alive; `destroy()` stops it.
 	 */
 	ttlCleanupIntervalSec: number;
 }
@@ -767,6 +771,7 @@ interface AdapterPostgresOptions extends AdapterAbstractOptions {
 	/**
 	 * Interval in seconds for automatic cleanup of expired keys.
 	 * Set to 0 to disable automatic cleanup.
+	 * The timer never keeps the process alive; `destroy()` stops it.
 	 */
 	ttlCleanupIntervalSec: number;
 }
@@ -803,15 +808,17 @@ interface AdapterSqliteOptions extends AdapterAbstractOptions {
 	/**
 	 * Interval in seconds for automatic cleanup of expired keys.
 	 * Set to 0 to disable automatic cleanup.
+	 * The timer never keeps the process alive; `destroy()` stops it.
 	 */
 	ttlCleanupIntervalSec: number;
 }
 ```
 
 **Connection ownership:** the adapter never opens, closes or reconfigures the handle — it
-sets no pragmas. For several processes on one file, open it with a busy timeout
-(`new DatabaseSync(path, { timeout: 5000 })`) so a locked write waits instead of failing,
-and consider `PRAGMA journal_mode = WAL`.
+sets no pragmas. Call `destroy()` before you close the handle: if the TTL cleanup finds it
+closed, it logs one error and stops. For several processes on one file, open it with a busy
+timeout (`new DatabaseSync(path, { timeout: 5000 })`) so a locked write waits instead of
+failing, and consider `PRAGMA journal_mode = WAL`.
 
 **Atomicity:** `setIfAbsent`, `cas`, `expire` and `set` are single statements.
 `getSet`, `incr`/`decr`, `setMultiple`, `clear` and `transaction` run in `BEGIN IMMEDIATE`,

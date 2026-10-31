@@ -32,6 +32,7 @@ export interface AdapterPostgresOptions extends AdapterAbstractOptions {
 	/**
 	 * Interval in seconds for automatic cleanup of expired keys.
 	 * Set to 0 to disable automatic cleanup.
+	 * The timer never keeps the process alive; `destroy()` stops it.
 	 */
 	ttlCleanupIntervalSec: number;
 }
@@ -120,15 +121,16 @@ export class AdapterPostgres extends AdapterAbstract {
 
 	/** @inheritdoc */
 	override async destroy(hard?: boolean): Promise<void> {
-		// stop the timer first so a pending tick cannot fire during DROP
+		// stop the timer first so a pending tick cannot fire during DROP, and mark the
+		// adapter down before any await so an in-flight tick does not re-arm it
 		clearTimeout(this.#cleanupTimer);
 		this.#cleanupTimer = undefined;
+		this._initialized = false;
 
 		if (hard) {
 			const { db, tableName } = this.options;
 			await db.query(`DROP TABLE IF EXISTS ${tableName}`);
 		}
-		this._initialized = false;
 	}
 
 	async #maybeTTLCleanup() {
@@ -145,11 +147,17 @@ export class AdapterPostgres extends AdapterAbstract {
 				logger?.error?.(`TTL cleanup error: ${err}`);
 			}
 
+			// destroy() ran while the query was in flight
+			if (!this._initialized) return;
+
 			// schedule next...
 			this.#cleanupTimer = setTimeout(
 				this.#maybeTTLCleanup.bind(this),
 				this.options.ttlCleanupIntervalSec * 1000,
 			);
+			// housekeeping must not hold the process open; destroy() still clears it
+			// (`?.`: browser and worker timers are plain numbers)
+			this.#cleanupTimer.unref?.();
 		}
 	}
 

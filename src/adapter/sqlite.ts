@@ -34,6 +34,7 @@ export interface AdapterSqliteOptions extends AdapterAbstractOptions {
 	/**
 	 * Interval in seconds for automatic cleanup of expired keys.
 	 * Set to 0 to disable automatic cleanup.
+	 * The timer never keeps the process alive; `destroy()` stops it.
 	 */
 	ttlCleanupIntervalSec: number;
 }
@@ -183,7 +184,16 @@ export class AdapterSqlite extends AdapterAbstract {
 	#maybeTTLCleanup() {
 		clearTimeout(this.#cleanupTimer); // safety
 		if (this.options.ttlCleanupIntervalSec) {
-			const { tableName, logger } = this.options;
+			const { db, tableName, logger } = this.options;
+
+			// The caller closed the handle without destroy(). Every later tick would fail
+			// the same way, so say it once and stop.
+			if (!db.isOpen) {
+				logger?.error?.(
+					"TTL cleanup stopped: the database handle was closed before destroy()",
+				);
+				return;
+			}
 
 			// do the cleanup now
 			try {
@@ -200,6 +210,9 @@ export class AdapterSqlite extends AdapterAbstract {
 				this.#maybeTTLCleanup.bind(this),
 				this.options.ttlCleanupIntervalSec * 1000,
 			);
+			// housekeeping must not hold the process open; destroy() still clears it
+			// (`?.`: browser and worker timers are plain numbers)
+			this.#cleanupTimer.unref?.();
 		}
 	}
 

@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import process from "node:process";
 import { DatabaseSync } from "node:sqlite";
 import { createKVClient } from "../src/kv.ts";
 import { sleep } from "../src/utils/sleep.ts";
+import { createPg } from "./_pg.ts";
 import { createRedis } from "./_redis.ts";
 import { testsRunner } from "./_tests-runner.ts";
 
@@ -1032,6 +1035,111 @@ testsRunner([
 				db2.close();
 			} finally {
 				rmSync(dir, { recursive: true, force: true });
+			}
+		},
+	},
+	{
+		name: "sqlite: TTL cleanup stops once the handle is closed without destroy()",
+		raw: true,
+		async fn() {
+			const logged: string[] = [];
+			const log = (...args: any[]) => logged.push(args.join(" "));
+			const db = new DatabaseSync(":memory:");
+			const client = createKVClient("x:", "sqlite", {
+				db,
+				ttlCleanupIntervalSec: 0.05,
+				logger: { debug: log, log, warn: log, error: log },
+			});
+			try {
+				await client.initialize();
+				db.close();
+				// ~6 ticks: each would log again if the cleanup kept rescheduling
+				await sleep(300);
+				assert.equal(logged.length, 1, logged.join("\n"));
+				assert.match(logged[0]!, /closed before destroy\(\)/);
+			} finally {
+				await client.destroy();
+			}
+		},
+	},
+	{
+		name: "postgres: destroy() during an in-flight cleanup query does not re-arm it",
+		raw: true,
+		async fn() {
+			const logged: string[] = [];
+			const log = (...args: any[]) => logged.push(args.join(" "));
+			const db = createPg();
+			const client = createKVClient("x:", "postgres", {
+				db,
+				tableName: "_kv_destroy_race",
+				ttlCleanupIntervalSec: 0.05,
+				logger: { debug: log, log, warn: log, error: log },
+			});
+			try {
+				// initialize() starts the first cleanup query without awaiting it, so
+				// destroy() lands while it is in flight
+				await client.initialize();
+				await client.destroy(true);
+				// ~6 ticks: a re-armed timer would fail on the dropped table each time
+				await sleep(300);
+				// at most the in-flight query's own error, had the DROP won the race
+				assert(logged.length <= 1, logged.join("\n"));
+			} finally {
+				await client.destroy(true);
+				await db.end();
+			}
+		},
+	},
+	{
+		name: "cleanup timer does not hold the process open (no destroy())",
+		raw: true,
+		async fn() {
+			// Under `pnpm run test:deno` (the gate before a JSR publish) the child runs on
+			// Deno too, which needs `run -A`; Node runs the .ts directly.
+			const childPath = join("tests", "_no-destroy-child.ts");
+			try {
+				for (const type of ["memory", "sqlite", "postgres"]) {
+					const args =
+						"Deno" in globalThis ? ["run", "-A", childPath] : [childPath];
+					const child = spawn(process.execPath, [...args, type], {
+						cwd: join(import.meta.dirname, ".."),
+						stdio: ["ignore", "pipe", "pipe"],
+					});
+
+					let out = "";
+					child.stdout.setEncoding("utf8");
+					child.stderr.setEncoding("utf8");
+					child.stdout.on("data", (chunk: string) => (out += chunk));
+					child.stderr.on("data", (chunk: string) => (out += chunk));
+					// "close" == the child is gone AND its output is drained
+					const exited = new Promise<number | null>((resolve) =>
+						child.once("close", (code) => resolve(code)),
+					);
+
+					// The child exits right after READY; a leaked timer keeps it alive.
+					const ref = { id: -1 };
+					const code = await Promise.race([
+						exited,
+						sleep(10_000, ref).then(() => "timeout" as const),
+					]);
+					clearTimeout(ref.id);
+					if (code === "timeout") {
+						child.kill("SIGKILL");
+						await exited;
+						throw new Error(
+							`(${type}) child did not exit by itself:\n${out}`,
+						);
+					}
+					assert.equal(code, 0, `(${type}) child failed:\n${out}`);
+					assert(
+						out.includes("READY"),
+						`(${type}) child did not start:\n${out}`,
+					);
+				}
+			} finally {
+				const db = createPg();
+				await db.query(`DROP TABLE IF EXISTS _kv_no_destroy_child`);
+				await db.end();
 			}
 		},
 	},
