@@ -1,0 +1,7 @@
+{
+  "name": "@marianmeres/kv",
+  "exports": "./src/index.ts",
+  "publish": {
+    "include": ["src/**/*.ts", "README.md", "API.md", "AGENTS.md", "LICENSE"]
+  }
+}

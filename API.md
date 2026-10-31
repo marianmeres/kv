@@ -34,7 +34,7 @@ function createKVClient<T extends keyof KnownTypes>(
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `namespace` | `string` | `""` | Key prefix applied to all operations. Must end with `:` or be empty. |
-| `type` | `"memory" \| "redis" \| "postgres" \| "deno-kv"` | `"memory"` | The storage backend to use. |
+| `type` | `"memory" \| "redis" \| "postgres"` | `"memory"` | The storage backend to use. |
 | `options` | `Partial<AdapterOptions>` | `{}` | Adapter-specific configuration options. |
 
 **Returns:** A configured adapter instance. Call `initialize()` before use.
@@ -42,7 +42,6 @@ function createKVClient<T extends keyof KnownTypes>(
 **Throws:**
 - `TypeError` - If namespace doesn't end with `:` (and is not empty)
 - `TypeError` - If an unsupported adapter type is specified
-- `Error` - If `"deno-kv"` is used outside the Deno runtime
 - `Error` - If required options (like `db`) are missing for the adapter
 
 **Example:**
@@ -65,11 +64,6 @@ import pg from "pg";
 const pool = new pg.Pool({ connectionString: "..." });
 const postgres = createKVClient("myapp:", "postgres", { db: pool });
 await postgres.initialize();
-
-// Deno KV (Deno runtime only)
-const kv = await Deno.openKv();
-const denoKv = createKVClient("myapp:", "deno-kv", { db: kv });
-await denoKv.initialize();
 ```
 
 ---
@@ -122,7 +116,7 @@ info(): AdapterInfo
 
 ```typescript
 const info = client.info();
-console.log(info.type); // "redis", "postgres", "memory", or "deno-kv"
+console.log(info.type); // "redis", "postgres", or "memory"
 ```
 
 ---
@@ -218,7 +212,7 @@ decr(key: string, by?: number, options?: Partial<SetOptions>): Promise<number>
 
 **Returns:** the new value after the operation.
 
-**Errors:** throws `TypeError("KV value is not a number")` when the stored value is not a JSON number. On Deno KV under heavy contention, may throw `KvRaceError` after `atomicRetryAttempts` (default 20) failed CAS attempts.
+**Errors:** throws `TypeError("KV value is not a number")` when the stored value is not a JSON number.
 
 **Example:**
 
@@ -245,7 +239,7 @@ cas(key: string, expected: any, next: any, options?: Partial<SetOptions>): Promi
 
 > Missing keys never match, even when `expected` is `null`.
 
-When `options.ttl` is supplied, the stored expiration is updated on success. When it is omitted, the existing TTL is preserved (Deno KV: best-effort — see the Deno KV section).
+When `options.ttl` is supplied, the stored expiration is updated on success. When it is omitted, the existing TTL is preserved.
 
 **Example** (optimistic update):
 
@@ -300,8 +294,6 @@ delete(key: string): Promise<boolean>
 
 **Returns:** `Promise<boolean>` - `true` if the key existed and was deleted, `false` if it didn't exist.
 
-> **Note:** Deno KV always returns `true`, even for non-existent keys.
-
 ---
 
 #### `exists(key)`
@@ -341,8 +333,6 @@ expire(key: string, ttl: number): Promise<boolean>
 
 **Returns:** `Promise<boolean>` - `true` if the expiration was set, `false` if the key doesn't exist.
 
-> **Note:** Not supported in Deno KV (always returns `false`).
-
 **Example:**
 
 ```typescript
@@ -375,8 +365,6 @@ type TtlResult =
 - `"missing"` — key doesn't exist (or has expired)
 - `"no-ttl"` — key exists with no expiration
 - `"expires"` — key exists and will expire at `.at`
-
-> **Note:** Deno KV cannot query TTL — existing keys always return `{ state: "no-ttl" }`; absent keys return `{ state: "missing" }`.
 
 **Example:**
 
@@ -457,7 +445,6 @@ Ordering is not guaranteed across adapters — use `keys()` if you need sorted o
 **Per-adapter behavior:**
 - Redis: wraps `SCAN` (non-blocking).
 - PostgreSQL: uses a server-side cursor (`DECLARE CURSOR`) inside a short transaction. Early break releases the cursor and commits.
-- Deno KV: direct `db.list()` pass-through.
 - Memory: yields from the internal `Map`.
 
 **Example:**
@@ -514,7 +501,7 @@ setMultiple(
 
 Accepts either the legacy tuple shape or an object shape that allows a **per-pair `ttl`** overriding `options.ttl`.
 
-More efficient than multiple individual `set` calls, especially for Redis, PostgreSQL, and Deno KV (the latter commits atomically).
+More efficient than multiple individual `set` calls, especially for Redis and PostgreSQL.
 
 **Parameters:**
 
@@ -586,9 +573,8 @@ Atomicity per adapter:
 | Memory | ✓ | Single-threaded by nature |
 | Redis | ✓ | Uses `MULTI`/`EXEC` |
 | PostgreSQL | ✓ | Pins a single connection for `BEGIN`/…/`COMMIT`, even on a `pg.Pool` |
-| Deno KV | Conditional | Atomic via `Deno.Kv.atomic()` when the transaction contains **no** `get` ops; falls back to sequential (non-atomic) when a `get` is present (Deno.Kv has no atomic-read) |
 
-Per-operation `options.ttl` is honored by **all** adapters (Redis, PostgreSQL, Memory, Deno KV).
+Per-operation `options.ttl` is honored by **all** adapters (Redis, PostgreSQL, Memory).
 
 **Parameters:**
 
@@ -633,7 +619,7 @@ Information about the adapter instance.
 ```typescript
 interface AdapterInfo {
   /** The adapter type identifier. */
-  type: string; // "redis" | "postgres" | "memory" | "deno-kv"
+  type: string; // "redis" | "postgres" | "memory"
 }
 ```
 
@@ -684,16 +670,6 @@ type SetMultipleEntry =
 ```
 
 Input shape accepted by `setMultiple()`.
-
----
-
-### `KvRaceError`
-
-```typescript
-class KvRaceError extends Error { /* ... */ }
-```
-
-Thrown by Deno KV-backed CAS primitives (`incr`, `decr`, `getSet`, `cas`) when the retry budget is exhausted due to contention. Configurable via the adapter's `atomicRetryAttempts` option.
 
 ---
 
@@ -792,43 +768,6 @@ interface AdapterPostgresOptions extends AdapterAbstractOptions {
 - `expires_at` (TIMESTAMP WITH TIME ZONE) - Expiration time
 - `created_at` (TIMESTAMP WITH TIME ZONE) - Creation time
 - `updated_at` (TIMESTAMP WITH TIME ZONE) - Last update time
-
----
-
-### `AdapterDenoKvOptions`
-
-```typescript
-interface AdapterDenoKvOptions extends AdapterAbstractOptions {
-  /**
-   * Deno.Kv instance obtained via `Deno.openKv()`.
-   */
-  db: Deno.Kv;
-
-  /**
-   * When true, `delete()` pre-checks the key's existence and returns the
-   * real "did it exist?" flag — at the cost of one extra round-trip.
-   * Default false preserves the Deno.Kv native always-true behavior.
-   */
-  strictDeleteResult?: boolean;
-
-  /**
-   * Max retry attempts for CAS-based primitives (incr/decr/getSet/cas)
-   * before throwing KvRaceError. Each retry adds exponential-with-jitter
-   * backoff capped at 50ms.
-   * @default 20
-   */
-  atomicRetryAttempts?: number;
-}
-```
-
-**Limitations:**
-- Only works in Deno runtime
-- `delete()` always returns `true` by default (Deno.Kv limitation) — opt-in to strict behavior via `strictDeleteResult: true`
-- `expire()` is not supported (always returns `false`)
-- `ttl()` returns `{ state: "no-ttl" }` for any existing key and `{ state: "missing" }` for absent ones — Deno.Kv cannot report the actual expiration
-- TTL can be set during `set()` but cannot be queried afterward
-- `transaction()` is atomic (via `Deno.Kv.atomic()`) **only** when the transaction contains no `get` operations — a mixed transaction falls back to sequential, non-atomic execution
-- `cas()` without `options.ttl` is best-effort TTL-preserving: Deno.Kv cannot read the current expiration, so any existing `expireIn` is cleared when the swap succeeds. Supply `options.ttl` explicitly if the key should remain bounded.
 
 ---
 

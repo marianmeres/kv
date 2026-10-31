@@ -5,22 +5,21 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 Key-value storage abstraction layer with support for multiple backend adapters:
-- redis 
+- redis
 - postgresql
 - memory
-- Deno KV (only in Deno runtime)
 
 The API is inspired by the Redis API.
 
 ## Installation
 
-```shell
-deno add jsr:@marianmeres/kv
+```sh
+npm install @marianmeres/kv    # or pnpm add
+deno add jsr:@marianmeres/kv   # Deno
 ```
 
-```shell
-npm i @marianmeres/kv
-```
+The `redis` and `postgres` adapters take a client you create yourself (`redis`, `pg`).
+Requires Node >= 24.12.
 
 ## Usage
 
@@ -33,7 +32,7 @@ const client = createKVClient("my-app-namespace:");
 // Or specify a different adapter type
 const redisClient = createKVClient(
     "my-app-namespace:",
-    'redis', // 'redis' | 'postgres' | 'deno-kv' | 'memory'
+    'redis', // 'redis' | 'postgres' | 'memory'
     { db: myRedisClient } // adapter-specific options
 );
 
@@ -98,29 +97,22 @@ type TtlResult =
 
 ## Adapter Feature Matrix
 
-| Feature | Memory | Redis | PostgreSQL | Deno KV |
-|---|:-:|:-:|:-:|:-:|
-| Persistent | ✗ | ✓ | ✓ | ✓ |
-| TTL on `set()` | ✓ | ✓ | ✓ | ✓ |
-| `ttl()` → `expires`/`no-ttl`/`missing` | ✓ | ✓ | ✓ | `no-ttl`/`missing` only |
-| `expire()` | ✓ | ✓ | ✓ | always `false` |
-| Atomic `setIfAbsent` / `incr` / `decr` / `cas` / `getSet` | ✓ | ✓ (Lua) | ✓ (UPSERT) | ✓ (CAS retry loop) |
-| Sorted `keys()` | ✓ | ✓ | ✓ | ✓ |
-| Streaming `keysIter()` | ✓ | ✓ (SCAN) | ✓ (cursor) | ✓ (native) |
-| Per-pair TTL in `setMultiple` | ✓ | ✓ | ✓ | ✓ |
-| Atomic `transaction()` | ✓ (single-threaded) | ✓ (MULTI) | ✓ (BEGIN/COMMIT) | ✓ when no `get` ops |
-| `delete()` returns real existed-flag | ✓ | ✓ | ✓ | opt-in via `strictDeleteResult` |
-| Background TTL cleanup | optional | native (Redis does it) | optional | native (Deno.Kv does it) |
-| `keys()` / `clear()` | ✓ | ✓ (non-cluster only) | ✓ | ✓ |
+| Feature | Memory | Redis | PostgreSQL |
+|---|:-:|:-:|:-:|
+| Persistent | ✗ | ✓ | ✓ |
+| TTL on `set()` | ✓ | ✓ | ✓ |
+| `ttl()` → `expires`/`no-ttl`/`missing` | ✓ | ✓ | ✓ |
+| `expire()` | ✓ | ✓ | ✓ |
+| Atomic `setIfAbsent` / `incr` / `decr` / `cas` / `getSet` | ✓ | ✓ (Lua) | ✓ (UPSERT) |
+| Sorted `keys()` | ✓ | ✓ | ✓ |
+| Streaming `keysIter()` | ✓ | ✓ (SCAN) | ✓ (cursor) |
+| Per-pair TTL in `setMultiple` | ✓ | ✓ | ✓ |
+| Atomic `transaction()` | ✓ (single-threaded) | ✓ (MULTI) | ✓ (BEGIN/COMMIT) |
+| `delete()` returns real existed-flag | ✓ | ✓ | ✓ |
+| Background TTL cleanup | optional | native (Redis does it) | optional |
+| `keys()` / `clear()` | ✓ | ✓ (non-cluster only) | ✓ |
 
 ## Adapter-Specific Limitations
-
-### Deno KV
-- **`delete()`**: Always returns `true`, even for non-existent keys (Deno.Kv limitation)
-- **`expire()`**: Not supported — always returns `false`
-- **`ttl()`**: Not supported — always returns `null`
-- **`transaction()`**: Atomic via `Deno.Kv.atomic()` **only** when the transaction contains no `get` operations. A transaction that mixes `get` with `set`/`delete` falls back to sequential (non-atomic) execution.
-- **Note**: TTL can be set during `set()`, but cannot be queried or modified after.
 
 ### Redis
 - **`keys()` and `clear()`**: Not supported in cluster mode (throws error)
@@ -137,11 +129,22 @@ type TtlResult =
 - Data is not persisted (in-memory only).
 - Supports optional TTL cleanup via `ttlCleanupIntervalSec` option.
 
-## Breaking Changes (2.1 / 3.0 candidate)
+## Breaking Changes (3.0.0)
 
-Since 2.0, the following changes are in this tree:
+- **The Deno KV adapter is removed.** `"deno-kv"` is no longer an adapter type, and
+  `AdapterDenoKv`, `AdapterDenoKvOptions` and `KvRaceError` (only Deno KV threw it) are no
+  longer exported. Deno KV has no equivalent outside the Deno runtime. Stay on 2.x if you
+  depend on it, or move to the `redis`, `postgres` or `memory` adapter.
+- The npm package now declares **Node >= 24.12** (`engines`). The memory, Redis and
+  PostgreSQL adapters behave exactly as in 2.4.
+- The JSR package now resolves `@marianmeres/clog`, `pg` and `redis` from npm instead of
+  JSR.
 
-**v3.0 (breaking — bump major if you ship these as-is):**
+## Changes in 2.2.0
+
+Shipped as a minor release, although the first two items are breaking:
+
+**Breaking:**
 - **`ttl(key)` now returns a discriminated `TtlResult`** — `{ state: "missing" | "no-ttl" | "expires", at? }` — instead of `Date | null | false`. Migration:
   ```ts
   // before
@@ -160,7 +163,7 @@ Since 2.0, the following changes are in this tree:
   ```
 - **Key validation is on by default.** Non-empty strings, no `\0`, total `namespace + key` length ≤ 512. Set `validateKeys: false` on the adapter options to opt out. Previous behavior silently accepted empty/overlong keys and let the backend error cryptically.
 
-**v2.1 / v2.2 (additive):**
+**Additive:**
 - New methods `setIfAbsent`, `incr`, `decr`, `getSet`, `cas`, `keysIter` on every adapter.
 - `setMultiple` accepts `{ key, value, ttl? }[]` entries in addition to the legacy `[key, value][]` tuples. Per-pair `ttl` overrides batch `options.ttl`.
 - Deno KV: new `strictDeleteResult: true` option pre-checks existence so `delete()` returns the real did-it-exist flag (default stays `true` for BC).
@@ -201,6 +204,26 @@ but a few change semantics in ways that could affect existing code:
 ## Full API Reference
 
 For complete API documentation including all methods, types, and adapter-specific options, see [API.md](API.md).
+
+## Development
+
+Node LTS (`.node-version`), pnpm, Biome, `node:test`. The source is erasable-only
+TypeScript that Node runs directly; `dist/` is built only for publishing.
+
+Every test runs against all three adapters, so `pnpm test` needs a running PostgreSQL and
+Redis. Copy `.env.example` to `.env` and fill in the connection details. Redis keys in the
+target database are deleted before each test, so point it at a scratch database (the
+default is `/13`).
+
+| Command                             | Does                                               |
+| ----------------------------------- | -------------------------------------------------- |
+| `pnpm install`                      | installs dependencies and dev tooling              |
+| `pnpm test` / `pnpm run test:watch` | `node --test` over `tests/**/*.test.ts`            |
+| `pnpm run typecheck`                | `tsc --noEmit` over `src` and `tests`              |
+| `pnpm run lint` / `pnpm run format` | `biome check .` read-only / with `--write`         |
+| `pnpm run ci`                       | typecheck + lint + test, what CI runs              |
+| `pnpm run build`                    | `tsc -p tsconfig.build.json` → `dist/`             |
+| `pnpm run rp` / `pnpm run rpm`      | patch / minor release, then publish to npm and JSR |
 
 ## License
 

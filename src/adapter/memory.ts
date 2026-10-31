@@ -35,7 +35,7 @@ export interface AdapterMemoryOptions extends AdapterAbstractOptions {
  * @remarks
  * - Fast and simple, ideal for testing and caching
  * - Supports TTL with optional automatic cleanup
- * - Thread-safe within a single Node.js/Deno process
+ * - Thread-safe within a single process
  * - Not suitable for multi-process or distributed environments
  *
  * @example
@@ -62,13 +62,9 @@ export class AdapterMemory extends AdapterAbstract {
 	#expirations = new Map<string, Date>();
 	#cleanupTimer: ReturnType<typeof setTimeout> | undefined;
 
-	constructor(
-		public override readonly namespace: string = "",
-		options: Partial<AdapterMemoryOptions> = {}
-	) {
-		super();
+	constructor(namespace: string = "", options: Partial<AdapterMemoryOptions> = {}) {
+		super(namespace);
 		this.options = Object.freeze({ ...this.options, ...(options || {}) });
-		this._assertValidNamespace();
 	}
 
 	/** @inheritdoc */

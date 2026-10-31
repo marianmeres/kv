@@ -4,6 +4,8 @@
  * Abstract base class and shared types for all KV adapters.
  */
 
+// biome-ignore-all lint/correctness/noUnusedFunctionParameters: the base-class stubs keep their documented parameter names
+
 import type { Logger } from "@marianmeres/clog";
 
 /**
@@ -18,7 +20,7 @@ export interface SetOptions extends Record<string, any> {
  * Information about the adapter instance.
  */
 export interface AdapterInfo {
-	/** The adapter type identifier (e.g., "redis", "postgres", "memory", "deno-kv"). */
+	/** The adapter type identifier (e.g., "redis", "postgres", "memory"). */
 	type: string;
 }
 
@@ -75,17 +77,6 @@ export type TtlResult =
 	| { state: "no-ttl" }
 	| { state: "expires"; at: Date };
 
-/**
- * Thrown when a CAS-based atomic primitive (e.g. Deno KV `incr`/`cas`)
- * exhausts its retry budget due to contention on the key.
- */
-export class KvRaceError extends Error {
-	constructor(message: string) {
-		super(message);
-		this.name = "KvRaceError";
-	}
-}
-
 function notImplemented(): any {
 	throw new Error("Not implemented");
 }
@@ -108,6 +99,8 @@ function notImplemented(): any {
 export abstract class AdapterAbstract {
 	protected _type: string = "abstract";
 
+	readonly namespace: string;
+
 	readonly options: AdapterAbstractOptions = {
 		defaultTtl: 0,
 		validateKeys: true,
@@ -124,14 +117,15 @@ export abstract class AdapterAbstract {
 	 * @throws {TypeError} If namespace doesn't end with a colon and is not empty.
 	 */
 	constructor(
-		public readonly namespace: string = "",
+		namespace: string = "",
 		options: Partial<AdapterAbstractOptions> = {}
 	) {
+		this.namespace = namespace;
 		this.options = { ...this.options, ...(options || {}) };
-		// NOTE: subclasses re-declare `namespace` with a field initializer, so
-		// validation runs in each subclass constructor AFTER `super()` completes.
-		// Calling `_assertValidNamespace()` here would see the base default (empty)
-		// and provide no safety.
+		this._assertValidNamespace();
+		// NOTE: subclasses re-declare `options` with a field initializer, which
+		// replaces the value set here once `super()` returns — so each subclass
+		// merges its own options again in its constructor.
 	}
 
 	protected _assertInitialized() {
@@ -355,8 +349,7 @@ export abstract class AdapterAbstract {
 	 *
 	 * @param key - The key to delete.
 	 * @returns A promise that resolves to `true` if the key existed and was deleted,
-	 *          `false` if the key didn't exist. Note: Deno KV always returns `true` unless
-	 *          the adapter was created with `strictDeleteResult: true`.
+	 *          `false` if the key didn't exist.
 	 *
 	 * @example
 	 * ```typescript
@@ -491,7 +484,7 @@ export abstract class AdapterAbstract {
 	 * Executes multiple operations within a single transaction.
 	 *
 	 * For adapters that support it (Redis, PostgreSQL), operations are atomic.
-	 * For memory and Deno KV, operations are executed sequentially.
+	 * For memory, operations are executed sequentially.
 	 *
 	 * @param operations - An array of operations to execute.
 	 * @returns A promise that resolves to an array of results for each operation.
@@ -516,7 +509,7 @@ export abstract class AdapterAbstract {
 	 * @param key - The key to set expiration on.
 	 * @param ttl - Time-to-live in seconds from now.
 	 * @returns A promise that resolves to `true` if the expiration was set,
-	 *          `false` if the key doesn't exist. Note: Not supported in Deno KV (always returns `false`).
+	 *          `false` if the key doesn't exist.
 	 *
 	 * @example
 	 * ```typescript
@@ -540,9 +533,6 @@ export abstract class AdapterAbstract {
 	 *   case "missing": console.log("key not found"); break;
 	 * }
 	 * ```
-	 *
-	 * Note: Deno KV cannot report TTL state — always returns `{ state: "no-ttl" }`
-	 * for existing keys and `{ state: "missing" }` for absent ones.
 	 */
 	ttl(key: string): Promise<TtlResult> {
 		return notImplemented();
@@ -556,7 +546,7 @@ export abstract class AdapterAbstract {
 	 * @example
 	 * ```typescript
 	 * const info = client.info();
-	 * console.log(info.type); // "redis", "postgres", "memory", or "deno-kv"
+	 * console.log(info.type); // "redis", "postgres", or "memory"
 	 * ```
 	 */
 	info(): AdapterInfo {

@@ -72,15 +72,11 @@ export class AdapterRedis extends AdapterAbstract {
 		validateKeys: true,
 	};
 
-	constructor(
-		public override readonly namespace: string = "",
-		options: Partial<AdapterRedisOptions> = {}
-	) {
-		super();
+	constructor(namespace: string = "", options: Partial<AdapterRedisOptions> = {}) {
+		super(namespace);
 		if (!this.namespace) {
 			throw new Error(`Missing namespace (required in RedisAdapter)`);
 		}
-		this._assertValidNamespace();
 		this.options = Object.freeze({ ...this.options, ...(options || {}) });
 		if (!this.options.db) {
 			throw new Error("Missing redis db client instance");
@@ -477,7 +473,7 @@ return 0
 		// Positive number: TTL in seconds remaining
 		return {
 			state: "expires",
-			at: new Date(Date.now() + parseInt(`${ttl}`) * 1_000),
+			at: new Date(Date.now() + parseInt(`${ttl}`, 10) * 1_000),
 		};
 	}
 
@@ -539,7 +535,7 @@ return 0
 		const { db } = this.options;
 
 		// SCAN scoped to this namespace — do not touch foreign tenants
-		const match = this.namespace + "*";
+		const match = `${this.namespace}*`;
 		const nsKeys: string[] = [];
 		let cursor = "0";
 		do {

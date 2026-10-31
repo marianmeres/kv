@@ -1,5 +1,3 @@
-// deno-lint-ignore-file no-explicit-any
-
 /**
  * @module
  *
@@ -26,7 +24,7 @@
 export function sleep(
 	timeout: number,
 	/**
-	 * Deno.test is quite strict and reports every non-cleared timeout... so we have to
+	 * A pending timeout keeps the process (and a test run) alive... so we have to
 	 * be able to pass in some object ref if needed (eg when sleep is not resolved via Promise.race)
 	 * to be able to do the clearing eventually.
 	 *
@@ -35,9 +33,10 @@ export function sleep(
 	__timeout_ref__: { id: number } = { id: -1 }
 ): Promise<void> {
 	return new Promise((resolve) => {
+		// Node returns a Timeout object, not a number; clearTimeout accepts either
 		__timeout_ref__.id = setTimeout(() => {
 			clearTimeout(__timeout_ref__.id);
 			resolve(undefined);
-		}, timeout) as any;
+		}, timeout) as unknown as number;
 	});
 }

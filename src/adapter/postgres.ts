@@ -61,12 +61,8 @@ export class AdapterPostgres extends AdapterAbstract {
 
 	#cleanupTimer: ReturnType<typeof setTimeout> | undefined;
 
-	constructor(
-		public override readonly namespace: string = "",
-		options: Partial<AdapterPostgresOptions> = {}
-	) {
-		super();
-		this._assertValidNamespace();
+	constructor(namespace: string = "", options: Partial<AdapterPostgresOptions> = {}) {
+		super(namespace);
 		this.options = Object.freeze({ ...this.options, ...(options || {}) });
 		if (!this.options.db) {
 			throw new Error("Missing pg instance");

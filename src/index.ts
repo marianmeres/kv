@@ -7,7 +7,6 @@
  * - **memory** - In-memory storage (default, not persisted)
  * - **redis** - Redis server
  * - **postgres** - PostgreSQL database
- * - **deno-kv** - Deno KV (Deno runtime only)
  *
  * @example
  * ```typescript

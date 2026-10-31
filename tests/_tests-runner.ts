@@ -1,12 +1,10 @@
-// deno-lint-ignore-file no-explicit-any
-
+import { test } from "node:test";
 import type pg from "pg";
 import { createPg } from "./_pg.ts";
 import { createKVClient } from "../src/kv.ts";
 import type { AdapterMemory } from "../src/adapter/memory.ts";
 import type { AdapterPostgres } from "../src/adapter/postgres.ts";
 import type { AdapterRedis } from "../src/adapter/redis.ts";
-import type { AdapterDenoKv } from "../src/adapter/deno-kv.ts";
 import { createRedis } from "./_redis.ts";
 
 export function testsRunner(
@@ -18,7 +16,6 @@ export function testsRunner(
 				memory: AdapterMemory;
 				postgres: AdapterPostgres;
 				redis: AdapterRedis;
-				"deno-kv": AdapterDenoKv;
 			};
 		}) => void | Promise<void>;
 		only?: boolean;
@@ -29,8 +26,9 @@ export function testsRunner(
 	for (const def of tests) {
 		const { name, ignore, only } = def;
 		if (typeof def.fn !== "function") continue;
-		Deno.test(
-			{ name, ignore, only },
+		test(
+			name,
+			{ skip: ignore, only },
 			def.raw
 				? () => def.fn({ dbPg: null as any, clients: null as any })
 				: async () => {
@@ -55,16 +53,12 @@ export function testsRunner(
 							if (stale.length > 0) await dbRedis.unlink(stale);
 						}
 
-						//
-						const dbDenoKv = await Deno.openKv(":memory:");
-
 						const ns = "app:";
 
 						const clients = {
 							memory: createKVClient(ns, "memory"),
 							postgres: createKVClient(ns, "postgres", { db: dbPg }),
 							redis: createKVClient(ns, "redis", { db: dbRedis }),
-							"deno-kv": createKVClient(ns, "deno-kv", { db: dbDenoKv }),
 						};
 
 						for (const client of Object.values(clients)) {
@@ -74,15 +68,12 @@ export function testsRunner(
 
 						try {
 							await def.fn({ dbPg, clients });
-						} catch (e) {
-							throw e;
 						} finally {
 							for (const client of Object.values(clients)) {
 								await client.destroy();
 							}
 							await dbPg?.end();
 							await dbRedis?.destroy();
-							await dbDenoKv?.close();
 						}
 				  }
 		);

@@ -1,0 +1,53 @@
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  # Node LTS is the dev runtime, the reference and the gate: a red run here blocks.
+  # Nothing runs on Deno or Bun.
+  node:
+    runs-on: ubuntu-latest
+    # Every test runs against all adapters, so the suite needs a real Postgres and Redis.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: kv
+          POSTGRES_PASSWORD: kv
+          POSTGRES_DB: test_kv
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_PG_HOST: localhost
+      TEST_PG_PORT: "5432"
+      TEST_PG_DATABASE: test_kv
+      TEST_PG_USER: kv
+      TEST_PG_PASSWORD: kv
+      TEST_REDIS_URL: redis://localhost:6379/13
+    steps:
+      - uses: actions/checkout@v7
+      # pnpm version is read from package.json "packageManager".
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run ci

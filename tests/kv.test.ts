@@ -1,7 +1,7 @@
 import { createKVClient } from "../src/kv.ts";
 import { sleep } from "../src/utils/sleep.ts";
 import { testsRunner } from "./_tests-runner.ts";
-import { assert, assertEquals, assertRejects } from "@std/assert";
+import assert from "node:assert/strict";
 import { createRedis } from "./_redis.ts";
 
 const k = "foo:bar";
@@ -12,7 +12,7 @@ testsRunner([
 		name: "info sanity check",
 		fn({ clients }) {
 			for (const [type, client] of Object.entries(clients)) {
-				assertEquals(client.info().type, type);
+				assert.deepEqual(client.info().type, type);
 			}
 		},
 		// only: true,
@@ -22,7 +22,7 @@ testsRunner([
 		async fn({ clients }) {
 			for (const [_type, client] of Object.entries(clients)) {
 				assert(await client.set(k, v));
-				assertEquals(await client.get(k), v);
+				assert.deepEqual(await client.get(k), v);
 				// console.log(_type, await client.get(k));
 			}
 		},
@@ -35,52 +35,49 @@ testsRunner([
 				// if (_type !== "redis") continue;
 				assert(await client.set(k, v));
 				assert(await client.set("hey", "ho"));
-				assertEquals(await client.get(k), v);
-				assertEquals((await client.ttl(k)).state, "no-ttl");
-				assertEquals(await client.exists(k), true);
-				assertEquals(await client.exists("asdf"), false);
-				assertEquals(await client.keys("*"), ["foo:bar", "hey"]);
-				assertEquals(await client.keys("foo:*"), ["foo:bar"]);
+				assert.deepEqual(await client.get(k), v);
+				assert.deepEqual((await client.ttl(k)).state, "no-ttl");
+				assert.deepEqual(await client.exists(k), true);
+				assert.deepEqual(await client.exists("asdf"), false);
+				assert.deepEqual(await client.keys("*"), ["foo:bar", "hey"]);
+				assert.deepEqual(await client.keys("foo:*"), ["foo:bar"]);
 				// console.log(1234, await client.__debug_dump());
 
 				// clear some
-				assertEquals(await client.clear("foo:*"), 1);
-				assertEquals(await client.clear("not-existing:*"), 0);
-				assertEquals(await client.keys("*"), ["hey"]);
-				assertEquals(await client.get(k), null);
+				assert.deepEqual(await client.clear("foo:*"), 1);
+				assert.deepEqual(await client.clear("not-existing:*"), 0);
+				assert.deepEqual(await client.keys("*"), ["hey"]);
+				assert.deepEqual(await client.get(k), null);
 				// console.log(await client.__debug_dump());
 
-				assertEquals(await client.clear("*"), 1);
-				assertEquals(await client.keys("*"), []);
+				assert.deepEqual(await client.clear("*"), 1);
+				assert.deepEqual(await client.keys("*"), []);
 
 				// set + delete
 				assert(await client.set(k, v));
-				assertEquals(await client.delete(k), true);
+				assert.deepEqual(await client.delete(k), true);
+				assert.deepEqual(await client.delete("not-existing"), false);
 
-				if (_type !== "deno-kv") {
-					assertEquals(await client.delete("not-existing"), false);
-				}
-
-				assertEquals(await client.clear("*"), 0);
+				assert.deepEqual(await client.clear("*"), 0);
 
 				await client.set(k, v);
 				await client.set("user:123:foo", "bar");
 				await client.set("user:456:foo", "baz");
 				await client.set("user:789:foo", "bat");
 
-				assertEquals(await client.keys("*"), [
+				assert.deepEqual(await client.keys("*"), [
 					"foo:bar",
 					"user:123:foo",
 					"user:456:foo",
 					"user:789:foo",
 				]);
-				assertEquals(await client.keys("user:456:*"), ["user:456:foo"]);
-				assertEquals(await client.clear("user:*"), 3);
-				assertEquals(await client.keys("*"), ["foo:bar"]);
+				assert.deepEqual(await client.keys("user:456:*"), ["user:456:foo"]);
+				assert.deepEqual(await client.clear("user:*"), 3);
+				assert.deepEqual(await client.keys("*"), ["foo:bar"]);
 				//
-				assertEquals(await client.clear("user:*"), 0);
-				assertEquals(await client.clear("user:*"), 0);
-				assertEquals(await client.clear("user:*"), 0);
+				assert.deepEqual(await client.clear("user:*"), 0);
+				assert.deepEqual(await client.clear("user:*"), 0);
+				assert.deepEqual(await client.clear("user:*"), 0);
 			}
 		},
 		// only: true,
@@ -90,7 +87,7 @@ testsRunner([
 		async fn({ clients }) {
 			for (const [_type, client] of Object.entries(clients)) {
 				assert(await client.set(k, { hey: { ho: { lets: "go" } } }));
-				assertEquals(await client.get(k), { hey: { ho: { lets: "go" } } });
+				assert.deepEqual(await client.get(k), { hey: { ho: { lets: "go" } } });
 
 				// console.log(await client.__debug_dump());
 			}
@@ -103,7 +100,7 @@ testsRunner([
 			for (const [_type, client] of Object.entries(clients)) {
 				// undef is returned as null
 				await client.set("undef", undefined);
-				assertEquals(await client.get("undef"), null);
+				assert.deepEqual(await client.get("undef"), null);
 				// console.log(await client.__debug_dump());
 			}
 		},
@@ -113,20 +110,17 @@ testsRunner([
 		name: "expiration works",
 		async fn({ clients }) {
 			for (const [_type, client] of Object.entries(clients)) {
-				// this is not supported in deno.kv
-				if (["deno-kv"].includes(_type)) continue;
-
 				const now = Date.now();
 				await client.set(k, v, { ttl: 1 }); // 1 sec
-				assertEquals(await client.get(k), v);
+				assert.deepEqual(await client.get(k), v);
 				const t = await client.ttl(k);
 				assert(t.state === "expires" && t.at.valueOf() > now + 999);
 
 				await sleep(1_001);
 
 				// must be expired now
-				assertEquals(await client.get(k), null);
-				assertEquals(await client.keys("*"), []);
+				assert.deepEqual(await client.get(k), null);
+				assert.deepEqual(await client.keys("*"), []);
 				// console.log(await client.__debug_dump());
 			}
 		},
@@ -143,12 +137,12 @@ testsRunner([
 				]);
 
 				// console.log(await client.__debug_dump());
-				assertEquals(await client.keys("user:*"), [
+				assert.deepEqual(await client.keys("user:*"), [
 					"user:123:foo",
 					"user:456:foo",
 				]);
 
-				assertEquals(await client.getMultiple([k, "user:456:foo"]), {
+				assert.deepEqual(await client.getMultiple([k, "user:456:foo"]), {
 					"foo:bar": "baz",
 					"user:456:foo": "baz",
 				});
@@ -167,12 +161,12 @@ testsRunner([
 					{ type: "delete", key: "foo:1" },
 				]);
 
-				assertEquals(
+				assert.deepEqual(
 					res,
 					[true, { hey: "ho" }, true, true],
 					`(Type: ${_type})`
 				);
-				assertEquals(await client.keys("foo:*"), ["foo:2"]);
+				assert.deepEqual(await client.keys("foo:*"), ["foo:2"]);
 				// console.log(await client.__debug_dump());
 			}
 		},
@@ -182,8 +176,8 @@ testsRunner([
 		name: "cleanup works",
 		async fn({ clients }) {
 			for (const [_type, _client] of Object.entries(clients)) {
-				// skip redis and deno here...
-				if (["redis", "deno-kv"].includes(_type)) continue;
+				// skip redis here...
+				if (_type === "redis") continue;
 
 				const client = createKVClient("", _type as any, {
 					defaultTtl: 1,
@@ -196,41 +190,12 @@ testsRunner([
 				await sleep(1_010);
 
 				// "missing" means expired-or-gone (ttl-related, not cleanup)
-				assertEquals((await client.ttl(k)).state, "missing");
+				assert.deepEqual((await client.ttl(k)).state, "missing");
 
 				// if not cleaned up, it wouldn't be empty
-				assertEquals(await client.__debug_dump(), {});
+				assert.deepEqual(await client.__debug_dump(), {});
 
 				await client.destroy();
-			}
-		},
-		// only: true,
-	},
-	{
-		name: "deno kv playground",
-		async fn({ clients }) {
-			for (const [_type, client] of Object.entries(clients)) {
-				if (_type !== "deno-kv") continue;
-
-				// set/get
-				assert(await client.set(k, { foo: "bar" }));
-				assertEquals((await client.get(k)).foo, "bar");
-
-				// Deno.Kv cannot query TTL — present keys always look "no-ttl"
-				assertEquals((await client.ttl(k)).state, "no-ttl");
-
-				//
-				assert(await client.exists(k));
-				assert(!(await client.exists("asdf")));
-
-				assertEquals(await client.keys("foo:*"), [k]);
-
-				//
-				assert(await client.delete(k));
-				assert(!(await client.exists(k)));
-
-				// true even for non-existent key
-				assert(await client.delete("asdf"));
 			}
 		},
 		// only: true,
@@ -245,11 +210,11 @@ testsRunner([
 				await client.set("n", null);
 
 				const got = await client.getMultiple(["f", "z", "s", "n", "missing"]);
-				assertEquals(got.f, false, `(${_type}) false should round-trip`);
-				assertEquals(got.z, 0, `(${_type}) 0 should round-trip`);
-				assertEquals(got.s, "", `(${_type}) empty string should round-trip`);
-				assertEquals(got.n, null, `(${_type}) null should round-trip`);
-				assertEquals(got.missing, null, `(${_type}) missing -> null`);
+				assert.deepEqual(got.f, false, `(${_type}) false should round-trip`);
+				assert.deepEqual(got.z, 0, `(${_type}) 0 should round-trip`);
+				assert.deepEqual(got.s, "", `(${_type}) empty string should round-trip`);
+				assert.deepEqual(got.n, null, `(${_type}) null should round-trip`);
+				assert.deepEqual(got.missing, null, `(${_type}) missing -> null`);
 			}
 		},
 	},
@@ -258,12 +223,12 @@ testsRunner([
 		async fn({ clients }) {
 			for (const [_type, client] of Object.entries(clients)) {
 				await client.set("nullish", null);
-				assertEquals(
+				assert.deepEqual(
 					await client.exists("nullish"),
 					true,
 					`(${_type}) key with null value must still exist`
 				);
-				assertEquals(
+				assert.deepEqual(
 					await client.exists("never-set"),
 					false,
 					`(${_type}) missing key must not exist`
@@ -281,14 +246,14 @@ testsRunner([
 				await client.set("a.2", 2);
 				await client.set("b1", 3);
 
-				assertEquals(
+				assert.deepEqual(
 					await client.keys("*"),
 					["a.1", "a.2", "b1"],
 					`(${_type}) keys must be sorted`
 				);
 
 				// "." in the pattern is a literal, not a regex wildcard
-				assertEquals(
+				assert.deepEqual(
 					(await client.keys("a.*")).toSorted(),
 					["a.1", "a.2"],
 					`(${_type}) dot is literal`
@@ -296,7 +261,7 @@ testsRunner([
 
 				// "a?1" matches "a.1" (? = any single char), not "b1"
 				const q = (await client.keys("a?1")).toSorted();
-				assertEquals(q, ["a.1"], `(${_type}) ? is single-char wildcard`);
+				assert.deepEqual(q, ["a.1"], `(${_type}) ? is single-char wildcard`);
 			}
 		},
 	},
@@ -304,8 +269,6 @@ testsRunner([
 		name: "B6: ttl:0 explicitly disables expiration (overrides defaultTtl)",
 		async fn({ clients }) {
 			for (const [_type, _client] of Object.entries(clients)) {
-				if (_type === "deno-kv") continue; // ttl() not supported
-
 				const client = createKVClient("app2:", _type as any, {
 					defaultTtl: 60,
 					db: _client.options.db,
@@ -316,7 +279,7 @@ testsRunner([
 					// implicit -> uses defaultTtl
 					await client.set("a", "x");
 					const tA = await client.ttl("a");
-					assertEquals(
+					assert.deepEqual(
 						tA.state,
 						"expires",
 						`(${_type}) defaultTtl should apply`
@@ -325,7 +288,7 @@ testsRunner([
 					// explicit ttl:0 -> no expiration
 					await client.set("b", "x", { ttl: 0 });
 					const tB = await client.ttl("b");
-					assertEquals(
+					assert.deepEqual(
 						tB.state,
 						"no-ttl",
 						`(${_type}) ttl:0 must disable expiration`
@@ -348,19 +311,17 @@ testsRunner([
 
 			// "_" in the pattern should match ONLY literal "_", not any char
 			const underscores = await client.keys("under_score");
-			assertEquals(underscores, ["under_score"]);
+			assert.deepEqual(underscores, ["under_score"]);
 
 			// "%" in the pattern should match ONLY literal "%", not any chars
 			const percents = await client.keys("with%pct");
-			assertEquals(percents, ["with%pct"]);
+			assert.deepEqual(percents, ["with%pct"]);
 		},
 	},
 	{
 		name: "B2: transaction() honors per-op TTL",
 		async fn({ clients }) {
 			for (const [_type, client] of Object.entries(clients)) {
-				if (_type === "deno-kv") continue; // ttl() not queryable
-
 				await client.transaction([
 					{ type: "set", key: "tx:ttl", value: "v", options: { ttl: 120 } },
 				]);
@@ -384,7 +345,7 @@ testsRunner([
 			const client = clients.postgres;
 			const longKey = "x".repeat(600); // exceeds VARCHAR(512)
 
-			await assertRejects(
+			await assert.rejects(
 				() =>
 					client.transaction([
 						{ type: "set", key: "rollback:good", value: "keep-me" },
@@ -394,7 +355,7 @@ testsRunner([
 			);
 
 			// The first set must have been rolled back with the second's failure.
-			assertEquals(
+			assert.deepEqual(
 				await client.get("rollback:good"),
 				null,
 				"postgres transaction must roll back prior set on error"
@@ -410,7 +371,7 @@ testsRunner([
 			// Must be Promise-chainable — not a raw object
 			assert(p && typeof (p as any).then === "function", "get() must return a Promise");
 			const v = await p;
-			assertEquals(v, { a: 1 });
+			assert.deepEqual(v, { a: 1 });
 		},
 	},
 	{
@@ -438,10 +399,10 @@ testsRunner([
 				await b.set("gamma", 3);
 
 				const dumpA = await a.__debug_dump();
-				assertEquals(Object.keys(dumpA).toSorted(), ["alpha", "beta"]);
+				assert.deepEqual(Object.keys(dumpA).toSorted(), ["alpha", "beta"]);
 
 				const dumpB = await b.__debug_dump();
-				assertEquals(Object.keys(dumpB), ["gamma"]);
+				assert.deepEqual(Object.keys(dumpB), ["gamma"]);
 			} finally {
 				await a.clear("*");
 				await b.clear("*");
@@ -529,7 +490,7 @@ testsRunner([
 				await client.initialize();
 				await client.initialize();
 				const after = db.listenerCount?.("error") ?? 0;
-				assertEquals(after, before, "error listener must not stack");
+				assert.deepEqual(after, before, "error listener must not stack");
 			} finally {
 				await client.destroy();
 				if (db.isOpen) await db.destroy();
@@ -544,17 +505,17 @@ testsRunner([
 		async fn({ clients }) {
 			for (const [_type, client] of Object.entries(clients)) {
 				await client.clear("*");
-				assertEquals(
+				assert.deepEqual(
 					await client.setIfAbsent("lock", "a"),
 					true,
 					`(${_type}) first set must succeed`
 				);
-				assertEquals(
+				assert.deepEqual(
 					await client.setIfAbsent("lock", "b"),
 					false,
 					`(${_type}) second set must fail`
 				);
-				assertEquals(
+				assert.deepEqual(
 					await client.get("lock"),
 					"a",
 					`(${_type}) value must not have been overwritten`
@@ -566,16 +527,15 @@ testsRunner([
 		name: "setIfAbsent: replaces expired keys",
 		async fn({ clients }) {
 			for (const [_type, client] of Object.entries(clients)) {
-				if (_type === "deno-kv") continue; // no TTL query; skipping
 				await client.clear("*");
 				await client.set("exp", "old", { ttl: 1 });
 				await sleep(1_100);
-				assertEquals(
+				assert.deepEqual(
 					await client.setIfAbsent("exp", "new"),
 					true,
 					`(${_type}) setIfAbsent should succeed on expired key`
 				);
-				assertEquals(await client.get("exp"), "new");
+				assert.deepEqual(await client.get("exp"), "new");
 			}
 		},
 	},
@@ -591,7 +551,7 @@ testsRunner([
 					)
 				);
 				const wins = results.filter(Boolean).length;
-				assertEquals(
+				assert.deepEqual(
 					wins,
 					1,
 					`(${_type}) expected exactly one winner, got ${wins}`
@@ -606,12 +566,12 @@ testsRunner([
 				await client.clear("*");
 
 				// missing key -> creates with delta
-				assertEquals(await client.incr("c"), 1, `(${_type}) initial incr`);
-				assertEquals(await client.incr("c"), 2);
-				assertEquals(await client.incr("c", 5), 7);
-				assertEquals(await client.decr("c"), 6);
-				assertEquals(await client.decr("c", 3), 3);
-				assertEquals(await client.get("c"), 3);
+				assert.deepEqual(await client.incr("c"), 1, `(${_type}) initial incr`);
+				assert.deepEqual(await client.incr("c"), 2);
+				assert.deepEqual(await client.incr("c", 5), 7);
+				assert.deepEqual(await client.decr("c"), 6);
+				assert.deepEqual(await client.decr("c", 3), 3);
+				assert.deepEqual(await client.get("c"), 3);
 			}
 		},
 	},
@@ -621,10 +581,9 @@ testsRunner([
 			for (const [_type, client] of Object.entries(clients)) {
 				await client.clear("*");
 				await client.set("s", "hello");
-				await assertRejects(
+				await assert.rejects(
 					() => client.incr("s"),
-					TypeError,
-					"not a number",
+					{ name: "TypeError", message: /not a number/ },
 					`(${_type}) incr on string must throw TypeError`
 				);
 			}
@@ -639,7 +598,7 @@ testsRunner([
 				await Promise.all(
 					Array.from({ length: N }, () => client.incr("counter"))
 				);
-				assertEquals(
+				assert.deepEqual(
 					await client.get("counter"),
 					N,
 					`(${_type}) ${N} parallel increments should sum to ${N}`
@@ -654,24 +613,24 @@ testsRunner([
 				await client.clear("*");
 
 				// missing -> null; now stored as new
-				assertEquals(
+				assert.deepEqual(
 					await client.getSet("k", 1),
 					null,
 					`(${_type}) getSet missing returns null`
 				);
-				assertEquals(await client.get("k"), 1);
+				assert.deepEqual(await client.get("k"), 1);
 
 				// existing -> previous value
-				assertEquals(await client.getSet("k", 2), 1);
-				assertEquals(await client.get("k"), 2);
+				assert.deepEqual(await client.getSet("k", 2), 1);
+				assert.deepEqual(await client.get("k"), 2);
 
 				// falsy round-trip
 				await client.set("zero", 0);
-				assertEquals(await client.getSet("zero", "x"), 0);
+				assert.deepEqual(await client.getSet("zero", "x"), 0);
 				await client.set("empty", "");
-				assertEquals(await client.getSet("empty", "x"), "");
+				assert.deepEqual(await client.getSet("empty", "x"), "");
 				await client.set("falseFlag", false);
-				assertEquals(await client.getSet("falseFlag", "x"), false);
+				assert.deepEqual(await client.getSet("falseFlag", "x"), false);
 			}
 		},
 	},
@@ -682,7 +641,7 @@ testsRunner([
 				await client.clear("*");
 
 				// missing key -> always false, even expected null
-				assertEquals(
+				assert.deepEqual(
 					await client.cas("x", null, "new"),
 					false,
 					`(${_type}) missing key must fail cas even with expected=null`
@@ -691,18 +650,18 @@ testsRunner([
 				await client.set("x", "a");
 
 				// mismatch -> no swap
-				assertEquals(await client.cas("x", "z", "b"), false);
-				assertEquals(await client.get("x"), "a");
+				assert.deepEqual(await client.cas("x", "z", "b"), false);
+				assert.deepEqual(await client.get("x"), "a");
 
 				// match -> swap
-				assertEquals(await client.cas("x", "a", "b"), true);
-				assertEquals(await client.get("x"), "b");
+				assert.deepEqual(await client.cas("x", "a", "b"), true);
+				assert.deepEqual(await client.get("x"), "b");
 
 				// complex values: deep-equal
 				await client.set("obj", { n: 1 });
-				assertEquals(await client.cas("obj", { n: 1 }, { n: 2 }), true);
-				assertEquals(await client.cas("obj", { n: 1 }, { n: 3 }), false);
-				assertEquals(await client.get("obj"), { n: 2 });
+				assert.deepEqual(await client.cas("obj", { n: 1 }, { n: 2 }), true);
+				assert.deepEqual(await client.cas("obj", { n: 1 }, { n: 3 }), false);
+				assert.deepEqual(await client.get("obj"), { n: 2 });
 			}
 		},
 	},
@@ -722,7 +681,7 @@ testsRunner([
 				for await (const k of client.keysIter("*")) {
 					collected.push(k);
 				}
-				assertEquals(
+				assert.deepEqual(
 					collected.toSorted(),
 					["a", "b", "c"],
 					`(${_type}) keysIter must yield all matches`
@@ -762,7 +721,6 @@ testsRunner([
 		name: "setMultiple: per-pair ttl overrides batch ttl",
 		async fn({ clients }) {
 			for (const [_type, client] of Object.entries(clients)) {
-				if (_type === "deno-kv") continue; // no TTL query
 				await client.clear("*");
 
 				await client.setMultiple(
@@ -796,8 +754,8 @@ testsRunner([
 					["a", 1],
 					["b", 2],
 				]);
-				assertEquals(await client.get("a"), 1, `(${_type})`);
-				assertEquals(await client.get("b"), 2, `(${_type})`);
+				assert.deepEqual(await client.get("a"), 1, `(${_type})`);
+				assert.deepEqual(await client.get("b"), 2, `(${_type})`);
 			}
 		},
 	},
@@ -805,22 +763,19 @@ testsRunner([
 		name: "validateKeys: empty/null-char/oversize rejected by default",
 		async fn({ clients }) {
 			for (const [_type, client] of Object.entries(clients)) {
-				await assertRejects(
+				await assert.rejects(
 					() => client.set("", "v"),
-					TypeError,
-					"non-empty",
+					{ name: "TypeError", message: /non-empty/ },
 					`(${_type}) empty key must throw`
 				);
-				await assertRejects(
+				await assert.rejects(
 					() => client.set("bad\0key", "v"),
-					TypeError,
-					"null characters",
+					{ name: "TypeError", message: /null characters/ },
 					`(${_type}) null-char key must throw`
 				);
-				await assertRejects(
+				await assert.rejects(
 					() => client.set("x".repeat(600), "v"),
-					RangeError,
-					"512-char",
+					{ name: "RangeError", message: /512-char/ },
 					`(${_type}) oversize key must throw`
 				);
 			}
@@ -839,26 +794,7 @@ testsRunner([
 			try {
 				// should not throw (though storing "" as a key is odd, it's the caller's problem)
 				await c.set("ok", "v");
-				assertEquals(await c.get("ok"), "v");
-			} finally {
-				await c.destroy();
-			}
-		},
-	},
-	{
-		name: "strictDeleteResult: Deno KV opt-in reports real existence",
-		async fn({ clients }) {
-			const db = clients["deno-kv"].options.db;
-			const c = createKVClient("strict:", "deno-kv", {
-				db,
-				strictDeleteResult: true,
-			});
-			await c.initialize();
-			try {
-				assertEquals(await c.delete("never"), false);
-				await c.set("present", "v");
-				assertEquals(await c.delete("present"), true);
-				assertEquals(await c.delete("present"), false);
+				assert.deepEqual(await c.get("ok"), "v");
 			} finally {
 				await c.destroy();
 			}
@@ -907,18 +843,17 @@ testsRunner([
 				await client.clear("*");
 
 				// missing
-				assertEquals((await client.ttl("ghost")).state, "missing");
+				assert.deepEqual((await client.ttl("ghost")).state, "missing");
 
 				// existing, no ttl
 				await client.set("plain", "v");
-				assertEquals(
+				assert.deepEqual(
 					(await client.ttl("plain")).state,
 					"no-ttl",
 					`(${_type}) set without ttl should be no-ttl`
 				);
 
-				// existing, with ttl (skip deno-kv which can't query)
-				if (_type === "deno-kv") continue;
+				// existing, with ttl
 				await client.set("tick", "v", { ttl: 60 });
 				const t = await client.ttl("tick");
 				assert(
