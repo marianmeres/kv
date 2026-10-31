@@ -54,6 +54,7 @@
     "test:deno": "deno test -A --no-check --env-file tests/",
     "ci": "pnpm run typecheck && pnpm run lint && pnpm test",
     "prepublishOnly": "pnpm run ci && pnpm run build",
+    "jsr:check": "deno publish --dry-run --allow-dirty --no-check --set-version \"$npm_package_version\"",
     "release": "npx --yes @marianmeres/release@^2.2.0",
     "publish:jsr": "pnpm run test:deno && deno publish --no-check --set-version \"$npm_package_version\"",
     "publish:all": "pnpm publish && pnpm run publish:jsr",
