@@ -8,6 +8,9 @@ Machine-friendly reference for AI agents working with this codebase.
 - **Install**: `pnpm install` | **Test**: `pnpm test` (needs Postgres + Redis; SQLite runs in memory) |
   **Check all**: `pnpm run ci` | **Build**: `pnpm run build`
 - **Published**: npm (`dist/`, built by `tsc`) and JSR (`src/` via `jsr.json`, for Deno consumers)
+- **JSR imports**: `jsr.json` maps `@marianmeres/clog` to `jsr:` so Deno apps get one copy;
+  keep its range equal to `package.json`'s. `pg` and `redis` resolve from `package.json` as
+  `npm:`. Only `deno publish` reads `jsr.json`: `test:deno` still runs against npm clog.
 
 ## Purpose
 
