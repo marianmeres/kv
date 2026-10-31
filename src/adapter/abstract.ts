@@ -20,7 +20,7 @@ export interface SetOptions extends Record<string, any> {
  * Information about the adapter instance.
  */
 export interface AdapterInfo {
-	/** The adapter type identifier (e.g., "redis", "postgres", "memory"). */
+	/** The adapter type identifier (e.g., "redis", "postgres", "sqlite", "memory"). */
 	type: string;
 }
 
@@ -441,7 +441,7 @@ export abstract class AdapterAbstract {
 	/**
 	 * Retrieves multiple values in a single batch operation.
 	 *
-	 * More efficient than multiple individual `get` calls, especially for Redis and PostgreSQL.
+	 * More efficient than multiple individual `get` calls, especially for Redis, PostgreSQL and SQLite.
 	 *
 	 * @param keys - An array of keys to retrieve.
 	 * @returns A promise that resolves to an object mapping keys to their values.
@@ -460,7 +460,7 @@ export abstract class AdapterAbstract {
 	/**
 	 * Executes multiple operations within a single transaction.
 	 *
-	 * For adapters that support it (Redis, PostgreSQL), operations are atomic.
+	 * For adapters that support it (Redis, PostgreSQL, SQLite), operations are atomic.
 	 * For memory, operations are executed sequentially.
 	 *
 	 * @param operations - An array of operations to execute.
@@ -523,7 +523,7 @@ export abstract class AdapterAbstract {
 	 * @example
 	 * ```typescript
 	 * const info = client.info();
-	 * console.log(info.type); // "redis", "postgres", or "memory"
+	 * console.log(info.type); // "redis", "postgres", "sqlite", or "memory"
 	 * ```
 	 */
 	info(): AdapterInfo {

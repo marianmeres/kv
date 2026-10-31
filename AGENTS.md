@@ -5,7 +5,7 @@ Machine-friendly reference for AI agents working with this codebase.
 ## Quick Reference
 
 - **Stack**: TypeScript (erasable-only), Node LTS (`.node-version`), pnpm, `node:test`, Biome.
-- **Install**: `pnpm install` | **Test**: `pnpm test` (needs Postgres + Redis, see below) |
+- **Install**: `pnpm install` | **Test**: `pnpm test` (needs Postgres + Redis; SQLite runs in memory) |
   **Check all**: `pnpm run ci` | **Build**: `pnpm run build`
 - **Published**: npm (`dist/`, built by `tsc`) and JSR (`src/` via `jsr.json`, for Deno consumers)
 
@@ -23,7 +23,8 @@ src/
 │   ├── abstract.ts     — Base class + shared types
 │   ├── memory.ts       — In-memory adapter
 │   ├── redis.ts        — Redis adapter
-│   └── postgres.ts     — PostgreSQL adapter
+│   ├── postgres.ts     — PostgreSQL adapter
+│   └── sqlite.ts       — SQLite adapter (`node:sqlite`)
 └── utils/
     └── sleep.ts        — Sleep utility function
 
@@ -31,7 +32,8 @@ tests/
 ├── kv.test.ts          — Main test file (node:test); every test runs against all adapters
 ├── _tests-runner.ts    — Test harness: builds one client per adapter per test
 ├── _redis.ts           — Redis test helper
-└── _pg.ts              — PostgreSQL test helper
+├── _pg.ts              — PostgreSQL test helper
+└── _sqlite.ts          — SQLite test helper (fresh `:memory:` database per test)
 
 dist/                   — `tsc -p tsconfig.build.json` output; gitignored; the npm payload
 ```
@@ -57,14 +59,17 @@ dist/                   — `tsc -p tsconfig.build.json` output; gitignored; the
 7. TTL is in seconds; stored as absolute `Date` internally.
 8. Pattern matching: Redis-style (`*` = any chars, `?` = single char). All other characters — including `.`, `(`, `[`, `%`, `_` — are matched **literally**.
 9. TTL resolution: `options.ttl ?? defaultTtl`; `0` or negative disables expiration for that call (explicitly overrides `defaultTtl`).
-10. All pattern-to-regex / pattern-to-LIKE conversion lives in `abstract.ts` — use `_globToRegex()`, `_resolveTtl()`, `_normalizePairs()`; do not re-implement per-adapter.
+10. Shared helpers live in `abstract.ts` — use `_globToRegex()`, `_resolveTtl()`, `_normalizePairs()`; do not re-implement per-adapter. The SQL adapters keep their own pattern escaping next to the SQL that uses it: Postgres `#likePattern` (LIKE, `ESCAPE '\'`), SQLite `#globPattern` (GLOB — case-sensitive, unlike SQLite's LIKE; `[` → `[[]`). Both escape the namespace as a literal prefix.
 11. Postgres `transaction()` must pin a single connection via `pool.connect()`; every nested query uses that client, not `this.options.db`.
-12. Redis adapter owns the connection iff `initialize()` opened it (`#weOpened` flag).
+12. Redis adapter owns the connection iff `initialize()` opened it (`#weOpened` flag). The Postgres and SQLite adapters never close the `db` they were given.
 13. Key validation lives in `_withNs()` — enforced when `options.validateKeys !== false`. Reject empty strings, keys with `\0`, and total `namespace + key` length > 512.
 14. `ttl()` returns `TtlResult = { state: "missing" | "no-ttl" | "expires"; at? }` — discriminated union, not `Date | null | false`.
-15. `incr`/`decr`/`getSet`/`cas`/`setIfAbsent` must be atomic: Redis = Lua or NX; Postgres = UPSERT/UPDATE with RETURNING; Memory = plain read-modify-write (single-threaded).
-16. Non-numeric `incr`/`decr` target throws `TypeError("KV value is not a number")`. In Postgres, detect via error code `22P02`.
-17. `keysIter` must clean up on early consumer break — PG releases its server-side cursor in the generator's `finally`.
+15. `incr`/`decr`/`getSet`/`cas`/`setIfAbsent` must be atomic: Redis = Lua or NX; Postgres = UPSERT/UPDATE with RETURNING; SQLite = a single UPSERT/UPDATE (`setIfAbsent`, `cas`) or a read-modify-write inside `#atomic()` (`getSet`, `incr`/`decr`); Memory = plain read-modify-write (single-threaded).
+16. Non-numeric `incr`/`decr` target throws `TypeError("KV value is not a number")`. In Postgres, detect via error code `22P02`; SQLite checks `typeof` in JS, like Memory.
+17. `keysIter` must clean up on early consumer break — PG releases its server-side cursor in the generator's `finally`. SQLite pages by keyset (`key > last`), so nothing stays open between yields.
+18. SQLite: `src/` imports `node:sqlite` **type-only** — the caller passes the `DatabaseSync`. A runtime import would make every consumer of the package load `node:sqlite`.
+19. SQLite multi-statement operations go through `#atomic()`: `BEGIN IMMEDIATE`, or a savepoint when `db.isTransaction` (the caller's transaction on the same handle). The callback must stay synchronous — an `await` inside would let other work join the transaction.
+20. SQLite stores `value` as JSON text and `expires_at` as epoch ms (INTEGER), compared against a bound `Date.now()` — never SQLite's own clock. Read counts/integers through `Number()` (a handle opened with `readBigInts` returns bigints).
 
 ## Before Making Changes
 
@@ -74,11 +79,12 @@ dist/                   — `tsc -p tsconfig.build.json` output; gitignored; the
 
 ## Supported Adapters
 
-| Adapter    | Type String  | Required Options      | Limitations                                                        |
-| ---------- | ------------ | --------------------- | ------------------------------------------------------------------ |
-| Memory     | `"memory"`   | None                  | Not persisted                                                      |
-| Redis      | `"redis"`    | `db` (Redis client)   | Namespace required; `keys()`/`clear()` unavailable in cluster mode |
-| PostgreSQL | `"postgres"` | `db` (pg.Pool/Client) | `tableName` limited to `[A-Za-z0-9_]` + optional `schema.` prefix  |
+| Adapter    | Type String  | Required Options      | Limitations                                                                 |
+| ---------- | ------------ | --------------------- | --------------------------------------------------------------------------- |
+| Memory     | `"memory"`   | None                  | Not persisted                                                               |
+| Redis      | `"redis"`    | `db` (Redis client)   | Namespace required; `keys()`/`clear()` unavailable in cluster mode          |
+| PostgreSQL | `"postgres"` | `db` (pg.Pool/Client) | `tableName` limited to `[A-Za-z0-9_]` + optional `schema.` prefix           |
+| SQLite     | `"sqlite"`   | `db` (`DatabaseSync`) | `tableName` limited to `[A-Za-z0-9_]`, no schema prefix; synchronous driver |
 
 ## Core API
 
@@ -168,7 +174,8 @@ human action.
 
 ## Test Environment Variables
 
-Every test runs against all three adapters, so tests need a live Postgres and Redis. Put
+Every test runs against all four adapters, so tests need a live Postgres and Redis (SQLite
+uses a fresh `:memory:` database per test and needs nothing). Put
 these in `.env` (see `.env.example`); CI provides them via service containers
 (`.github/workflows/ci.yml`). The harness deletes **every key** in the Redis DB before each
 test — use a scratch DB.

@@ -7,6 +7,7 @@
  * - **memory** - In-memory storage (default, not persisted)
  * - **redis** - Redis server
  * - **postgres** - PostgreSQL database
+ * - **sqlite** - SQLite database (`node:sqlite`)
  *
  * @example
  * ```typescript

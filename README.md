@@ -7,6 +7,7 @@
 Key-value storage abstraction layer with support for multiple backend adapters:
 - redis
 - postgresql
+- sqlite (`node:sqlite`)
 - memory
 
 The API is inspired by the Redis API.
@@ -18,8 +19,8 @@ npm install @marianmeres/kv    # or pnpm add
 deno add jsr:@marianmeres/kv   # Deno
 ```
 
-The `redis` and `postgres` adapters take a client you create yourself (`redis`, `pg`).
-Requires Node >= 24.12.
+The `redis`, `postgres` and `sqlite` adapters take a client you create yourself (`redis`,
+`pg`, or a `node:sqlite` `DatabaseSync`, which ships with Node). Requires Node >= 24.12.
 
 ## Usage
 
@@ -32,7 +33,7 @@ const client = createKVClient("my-app-namespace:");
 // Or specify a different adapter type
 const redisClient = createKVClient(
 	"my-app-namespace:",
-	"redis", // 'redis' | 'postgres' | 'memory'
+	"redis", // 'redis' | 'postgres' | 'sqlite' | 'memory'
 	{ db: myRedisClient }, // adapter-specific options
 );
 
@@ -97,20 +98,20 @@ type TtlResult =
 
 ## Adapter Feature Matrix
 
-| Feature                                                   |       Memory        |         Redis          |    PostgreSQL    |
-| --------------------------------------------------------- | :-----------------: | :--------------------: | :--------------: |
-| Persistent                                                |          ✗          |           ✓            |        ✓         |
-| TTL on `set()`                                            |          ✓          |           ✓            |        ✓         |
-| `ttl()` → `expires`/`no-ttl`/`missing`                    |          ✓          |           ✓            |        ✓         |
-| `expire()`                                                |          ✓          |           ✓            |        ✓         |
-| Atomic `setIfAbsent` / `incr` / `decr` / `cas` / `getSet` |          ✓          |        ✓ (Lua)         |    ✓ (UPSERT)    |
-| Sorted `keys()`                                           |          ✓          |           ✓            |        ✓         |
-| Streaming `keysIter()`                                    |          ✓          |        ✓ (SCAN)        |    ✓ (cursor)    |
-| Per-pair TTL in `setMultiple`                             |          ✓          |           ✓            |        ✓         |
-| Atomic `transaction()`                                    | ✓ (single-threaded) |       ✓ (MULTI)        | ✓ (BEGIN/COMMIT) |
-| `delete()` returns real existed-flag                      |          ✓          |           ✓            |        ✓         |
-| Background TTL cleanup                                    |      optional       | native (Redis does it) |     optional     |
-| `keys()` / `clear()`                                      |          ✓          |  ✓ (non-cluster only)  |        ✓         |
+| Feature                                                   |       Memory        |         Redis          |    PostgreSQL    |          SQLite           |
+| --------------------------------------------------------- | :-----------------: | :--------------------: | :--------------: | :-----------------------: |
+| Persistent                                                |          ✗          |           ✓            |        ✓         |     ✓ (file database)     |
+| TTL on `set()`                                            |          ✓          |           ✓            |        ✓         |             ✓             |
+| `ttl()` → `expires`/`no-ttl`/`missing`                    |          ✓          |           ✓            |        ✓         |             ✓             |
+| `expire()`                                                |          ✓          |           ✓            |        ✓         |             ✓             |
+| Atomic `setIfAbsent` / `incr` / `decr` / `cas` / `getSet` |          ✓          |        ✓ (Lua)         |    ✓ (UPSERT)    | ✓ (UPSERT / IMMEDIATE tx) |
+| Sorted `keys()`                                           |          ✓          |           ✓            |        ✓         |             ✓             |
+| Streaming `keysIter()`                                    |          ✓          |        ✓ (SCAN)        |    ✓ (cursor)    |     ✓ (keyset paging)     |
+| Per-pair TTL in `setMultiple`                             |          ✓          |           ✓            |        ✓         |             ✓             |
+| Atomic `transaction()`                                    | ✓ (single-threaded) |       ✓ (MULTI)        | ✓ (BEGIN/COMMIT) |    ✓ (BEGIN IMMEDIATE)    |
+| `delete()` returns real existed-flag                      |          ✓          |           ✓            |        ✓         |             ✓             |
+| Background TTL cleanup                                    |      optional       | native (Redis does it) |     optional     |         optional          |
+| `keys()` / `clear()`                                      |          ✓          |  ✓ (non-cluster only)  |        ✓         |             ✓             |
 
 ## Adapter-Specific Limitations
 
@@ -125,6 +126,31 @@ type TtlResult =
 - Creates a table (default: `__kv`) in your database.
 - `tableName` must match `^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$` (word chars plus an optional `schema.` prefix).
 - `transaction()` pins a single connection from the Pool for the whole BEGIN/…/COMMIT block — safe to call against a `pg.Pool`.
+- Supports optional TTL cleanup via `ttlCleanupIntervalSec` option.
+
+### SQLite
+
+```typescript
+import { DatabaseSync } from "node:sqlite";
+
+const client = createKVClient("my-app-namespace:", "sqlite", {
+	db: new DatabaseSync("kv.db"),
+});
+```
+
+- Takes an open `node:sqlite` `DatabaseSync` and never closes it — the handle is yours,
+  and can be shared with your own tables or other adapters.
+- Creates a table (default: `__kv`). `tableName` must match `^[A-Za-z_][A-Za-z0-9_]*$` — no
+  `schema.` prefix.
+- `node:sqlite` is synchronous: each call blocks the event loop while it runs.
+- Multi-statement operations (`getSet`, `incr`/`decr`, `setMultiple`, `clear`,
+  `transaction`) run in `BEGIN IMMEDIATE`. Called inside a transaction you opened on the
+  same handle, they use a savepoint instead, so your `COMMIT`/`ROLLBACK` decides.
+- The adapter does not touch connection settings. For several processes on one file,
+  open it with a busy timeout (`new DatabaseSync(path, { timeout: 5000 })`) and consider
+  `PRAGMA journal_mode = WAL`.
+- `cas()` compares the stored JSON text, so object key order matters (as with Memory and
+  Redis; PostgreSQL compares `jsonb`, which ignores key order).
 - Supports optional TTL cleanup via `ttlCleanupIntervalSec` option.
 
 ### Memory
@@ -214,10 +240,10 @@ For complete API documentation including all methods, types, and adapter-specifi
 Node LTS (`.node-version`), pnpm, Biome, `node:test`. The source is erasable-only
 TypeScript that Node runs directly; `dist/` is built only for publishing.
 
-Every test runs against all three adapters, so `pnpm test` needs a running PostgreSQL and
-Redis. Copy `.env.example` to `.env` and fill in the connection details. Redis keys in the
-target database are deleted before each test, so point it at a scratch database (the
-default is `/13`).
+Every test runs against all four adapters, so `pnpm test` needs a running PostgreSQL and
+Redis (SQLite runs in memory, nothing to set up). Copy `.env.example` to `.env` and fill
+in the connection details. Redis keys in the target database are deleted before each
+test, so point it at a scratch database (the default is `/13`).
 
 | Command                             | Does                                               |
 | ----------------------------------- | -------------------------------------------------- |

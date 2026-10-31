@@ -1,4 +1,8 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { createKVClient } from "../src/kv.ts";
 import { sleep } from "../src/utils/sleep.ts";
 import { createRedis } from "./_redis.ts";
@@ -855,6 +859,172 @@ testsRunner([
 					t.state === "expires" && t.at instanceof Date,
 					`(${_type}) ttl-bearing key should be "expires"`,
 				);
+			}
+		},
+	},
+
+	// ─── v3.1: sqlite adapter ─────────────────────────────────────────────
+
+	{
+		name: "keys() is case-sensitive",
+		async fn({ clients }) {
+			for (const [_type, client] of Object.entries(clients)) {
+				await client.set("abc", 1);
+				await client.set("Abc", 2);
+				assert.deepEqual(await client.keys("a*"), ["abc"], `(${_type})`);
+				assert.deepEqual(await client.keys("A*"), ["Abc"], `(${_type})`);
+			}
+		},
+	},
+	{
+		name: "expired keys read as missing in every primitive",
+		async fn({ clients }) {
+			for (const [_type, client] of Object.entries(clients)) {
+				await client.clear("*");
+				// expire(k, -1) leaves a row already past its expiry in the SQL
+				// adapters — the not-yet-cleaned state — without sleeping
+				for (const key of ["g", "i", "gs", "sia", "c"]) {
+					await client.set(key, 41);
+					await client.expire(key, -1);
+				}
+				assert.deepEqual(await client.get("g"), null, `(${_type}) get`);
+				assert.deepEqual(await client.exists("g"), false, `(${_type}) exists`);
+				assert.deepEqual((await client.ttl("g")).state, "missing", `(${_type})`);
+				assert.deepEqual(await client.keys("*"), [], `(${_type}) keys`);
+
+				assert.deepEqual(await client.incr("i"), 1, `(${_type}) incr restarts`);
+				assert.deepEqual(
+					(await client.ttl("i")).state,
+					"no-ttl",
+					`(${_type}) incr must not inherit the expired row's ttl`,
+				);
+				assert.deepEqual(await client.getSet("gs", 1), null, `(${_type}) getSet`);
+				assert.deepEqual(await client.setIfAbsent("sia", 1), true, `(${_type})`);
+				assert.deepEqual(await client.cas("c", 41, 42), false, `(${_type}) cas`);
+			}
+		},
+	},
+	{
+		name: "sqlite: keys/clear treat [ and namespace wildcards as literals",
+		async fn({ clients }) {
+			const client = clients.sqlite;
+			await client.set("a[b]c", 1);
+			await client.set("abc", 2);
+			// unescaped, GLOB would read [b] as a character class matching "abc"
+			assert.deepEqual(await client.keys("a[b]c"), ["a[b]c"]);
+			assert.deepEqual(await client.keys("a[*"), ["a[b]c"]);
+
+			// the namespace is a literal prefix: "n*:" must not reach into "nX:"
+			const { db } = client.options;
+			const star = createKVClient("n*:", "sqlite", { db });
+			const plain = createKVClient("nX:", "sqlite", { db });
+			await star.initialize();
+			await plain.initialize();
+			await star.set("k", 1);
+			await plain.set("k", 2);
+			assert.deepEqual(await star.keys("*"), ["k"]);
+			assert.deepEqual(await star.clear("*"), 1);
+			assert.deepEqual(await plain.get("k"), 2);
+		},
+	},
+	{
+		name: "sqlite: transaction rolls back on error",
+		async fn({ clients }) {
+			const client = clients.sqlite;
+			await assert.rejects(
+				() =>
+					client.transaction([
+						{ type: "set", key: "rollback:good", value: "keep-me" },
+						{ type: "set", key: "x".repeat(600), value: "boom" },
+					]),
+				RangeError,
+			);
+			assert.deepEqual(await client.get("rollback:good"), null);
+			assert(!client.options.db.isTransaction, "no transaction may be left open");
+		},
+	},
+	{
+		name: "sqlite: joins a transaction the caller opened on the same handle",
+		async fn({ clients }) {
+			const client = clients.sqlite;
+			const { db } = client.options;
+
+			// the caller's ROLLBACK undoes the adapter's writes, atomic ones included
+			db.exec("BEGIN");
+			await client.set("a", 1);
+			assert.deepEqual(await client.getSet("a", 2), 1);
+			await client.incr("n");
+			await client.setMultiple([["b", 1]]);
+			db.exec("ROLLBACK");
+			assert.deepEqual(await client.keys("*"), []);
+
+			// a failed kv transaction undoes only itself; the caller's stays open
+			db.exec("BEGIN");
+			await client.set("keep", 1);
+			await assert.rejects(
+				() =>
+					client.transaction([
+						{ type: "set", key: "gone", value: 1 },
+						{ type: "set", key: "", value: 1 },
+					]),
+				TypeError,
+			);
+			assert(db.isTransaction, "the caller's transaction must still be open");
+			db.exec("COMMIT");
+			assert.deepEqual(await client.keys("*"), ["keep"]);
+		},
+	},
+	{
+		name: "sqlite: keysIter pages past the page size",
+		async fn({ clients }) {
+			const client = clients.sqlite;
+			const pad = (i: number) => String(i).padStart(4, "0");
+			const a = Array.from({ length: 1000 }, (_, i) => `a:${pad(i)}`);
+			const b = Array.from({ length: 3 }, (_, i) => `b:${pad(i)}`);
+			await client.setMultiple([...a, ...b].map((k) => [k, 1]));
+
+			// exactly two full pages, then an empty one
+			const seenA: string[] = [];
+			for await (const k of client.keysIter("a:*")) seenA.push(k);
+			assert.deepEqual(seenA, a);
+
+			// two full pages and a partial one
+			const seenAll: string[] = [];
+			for await (const k of client.keysIter("*")) seenAll.push(k);
+			assert.deepEqual(seenAll, [...a, ...b]);
+		},
+	},
+	{
+		name: "sqlite: persists to a file across handles; validates options",
+		raw: true,
+		async fn() {
+			assert.throws(() => createKVClient("x:", "sqlite", {}), /Missing sqlite/);
+
+			const dir = mkdtempSync(join(tmpdir(), "kv-sqlite-"));
+			const path = join(dir, "kv.db");
+			try {
+				const db1 = new DatabaseSync(path);
+				assert.throws(
+					() =>
+						createKVClient("x:", "sqlite", { db: db1, tableName: "main.kv" }),
+					/Invalid tableName/,
+				);
+				const c1 = createKVClient("x:", "sqlite", { db: db1, tableName: "kv" });
+				await c1.initialize();
+				await c1.set("k", { v: 1 }, { ttl: 60 });
+				await c1.destroy();
+				assert(db1.isOpen, "destroy() must leave the caller's handle open");
+				db1.close();
+
+				const db2 = new DatabaseSync(path);
+				const c2 = createKVClient("x:", "sqlite", { db: db2, tableName: "kv" });
+				await c2.initialize();
+				assert.deepEqual(await c2.get("k"), { v: 1 });
+				assert.deepEqual((await c2.ttl("k")).state, "expires");
+				await c2.destroy();
+				db2.close();
+			} finally {
+				rmSync(dir, { recursive: true, force: true });
 			}
 		},
 	},

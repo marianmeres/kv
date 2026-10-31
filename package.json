@@ -1,7 +1,7 @@
 {
   "name": "@marianmeres/kv",
   "version": "3.0.0",
-  "description": "Key-value storage abstraction with a unified, Redis-inspired API over memory, Redis and PostgreSQL backends.",
+  "description": "Key-value storage abstraction with a unified, Redis-inspired API over memory, Redis, PostgreSQL and SQLite backends.",
   "license": "MIT",
   "author": "Marian Meres",
   "type": "module",
@@ -38,6 +38,7 @@
     "redis",
     "postgres",
     "postgresql",
+    "sqlite",
     "cache",
     "ttl",
     "storage"

@@ -1,2 +1,2 @@
 Key-value storage abstraction layer providing a unified Redis-inspired API across
-memory, Redis, and PostgreSQL backends.
+memory, Redis, PostgreSQL, and SQLite backends.

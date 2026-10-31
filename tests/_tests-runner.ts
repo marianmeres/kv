@@ -3,9 +3,11 @@ import type pg from "pg";
 import type { AdapterMemory } from "../src/adapter/memory.ts";
 import type { AdapterPostgres } from "../src/adapter/postgres.ts";
 import type { AdapterRedis } from "../src/adapter/redis.ts";
+import type { AdapterSqlite } from "../src/adapter/sqlite.ts";
 import { createKVClient } from "../src/kv.ts";
 import { createPg } from "./_pg.ts";
 import { createRedis } from "./_redis.ts";
+import { createSqlite } from "./_sqlite.ts";
 
 export function testsRunner(
 	tests: {
@@ -16,6 +18,7 @@ export function testsRunner(
 				memory: AdapterMemory;
 				postgres: AdapterPostgres;
 				redis: AdapterRedis;
+				sqlite: AdapterSqlite;
 			};
 		}) => void | Promise<void>;
 		only?: boolean;
@@ -53,12 +56,15 @@ export function testsRunner(
 							if (stale.length > 0) await dbRedis.unlink(stale);
 						}
 
+						const dbSqlite = createSqlite();
+
 						const ns = "app:";
 
 						const clients = {
 							memory: createKVClient(ns, "memory"),
 							postgres: createKVClient(ns, "postgres", { db: dbPg }),
 							redis: createKVClient(ns, "redis", { db: dbRedis }),
+							sqlite: createKVClient(ns, "sqlite", { db: dbSqlite }),
 						};
 
 						for (const client of Object.values(clients)) {
@@ -74,6 +80,7 @@ export function testsRunner(
 							}
 							await dbPg?.end();
 							await dbRedis?.destroy();
+							dbSqlite.close();
 						}
 					},
 		);

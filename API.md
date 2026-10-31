@@ -31,11 +31,11 @@ function createKVClient<T extends keyof KnownTypes>(
 
 **Parameters:**
 
-| Parameter   | Type                                | Default    | Description                                                          |
-| ----------- | ----------------------------------- | ---------- | -------------------------------------------------------------------- |
-| `namespace` | `string`                            | `""`       | Key prefix applied to all operations. Must end with `:` or be empty. |
-| `type`      | `"memory" \| "redis" \| "postgres"` | `"memory"` | The storage backend to use.                                          |
-| `options`   | `Partial<AdapterOptions>`           | `{}`       | Adapter-specific configuration options.                              |
+| Parameter   | Type                                            | Default    | Description                                                          |
+| ----------- | ----------------------------------------------- | ---------- | -------------------------------------------------------------------- |
+| `namespace` | `string`                                        | `""`       | Key prefix applied to all operations. Must end with `:` or be empty. |
+| `type`      | `"memory" \| "redis" \| "postgres" \| "sqlite"` | `"memory"` | The storage backend to use.                                          |
+| `options`   | `Partial<AdapterOptions>`                       | `{}`       | Adapter-specific configuration options.                              |
 
 **Returns:** A configured adapter instance. Call `initialize()` before use.
 
@@ -64,6 +64,11 @@ import pg from "pg";
 const pool = new pg.Pool({ connectionString: "..." });
 const postgres = createKVClient("myapp:", "postgres", { db: pool });
 await postgres.initialize();
+
+// SQLite storage (node:sqlite ships with Node)
+import { DatabaseSync } from "node:sqlite";
+const sqlite = createKVClient("myapp:", "sqlite", { db: new DatabaseSync("kv.db") });
+await sqlite.initialize();
 ```
 
 ---
@@ -98,9 +103,9 @@ destroy(hard?: boolean): Promise<void>
 
 **Parameters:**
 
-| Parameter | Type      | Default | Description                                                            |
-| --------- | --------- | ------- | ---------------------------------------------------------------------- |
-| `hard`    | `boolean` | `false` | If `true`, performs a hard cleanup (e.g., drops tables in PostgreSQL). |
+| Parameter | Type      | Default | Description                                                                       |
+| --------- | --------- | ------- | --------------------------------------------------------------------------------- |
+| `hard`    | `boolean` | `false` | If `true`, performs a hard cleanup (e.g., drops tables in PostgreSQL and SQLite). |
 
 ---
 
@@ -116,7 +121,7 @@ info(): AdapterInfo
 
 ```typescript
 const info = client.info();
-console.log(info.type); // "redis", "postgres", or "memory"
+console.log(info.type); // "redis", "postgres", "sqlite", or "memory"
 ```
 
 ---
@@ -453,6 +458,7 @@ Ordering is not guaranteed across adapters — use `keys()` if you need sorted o
 **Per-adapter behavior:**
 - Redis: wraps `SCAN` (non-blocking).
 - PostgreSQL: uses a server-side cursor (`DECLARE CURSOR`) inside a short transaction. Early break releases the cursor and commits.
+- SQLite: keyset pages of 500 keys (`key > last ORDER BY key`). Nothing stays open between pages, so an early break has nothing to release.
 - Memory: yields from the internal `Map`.
 
 **Example:**
@@ -581,8 +587,9 @@ Atomicity per adapter:
 | Memory     |   ✓    | Single-threaded by nature                                            |
 | Redis      |   ✓    | Uses `MULTI`/`EXEC`                                                  |
 | PostgreSQL |   ✓    | Pins a single connection for `BEGIN`/…/`COMMIT`, even on a `pg.Pool` |
+| SQLite     |   ✓    | `BEGIN IMMEDIATE`; a savepoint inside a caller-opened transaction    |
 
-Per-operation `options.ttl` is honored by **all** adapters (Redis, PostgreSQL, Memory).
+Per-operation `options.ttl` is honored by **all** adapters (Redis, PostgreSQL, SQLite, Memory).
 
 **Parameters:**
 
@@ -627,7 +634,7 @@ Information about the adapter instance.
 ```typescript
 interface AdapterInfo {
 	/** The adapter type identifier. */
-	type: string; // "redis" | "postgres" | "memory"
+	type: string; // "redis" | "postgres" | "sqlite" | "memory"
 }
 ```
 
@@ -774,6 +781,56 @@ interface AdapterPostgresOptions extends AdapterAbstractOptions {
 - `expires_at` (TIMESTAMP WITH TIME ZONE) - Expiration time
 - `created_at` (TIMESTAMP WITH TIME ZONE) - Creation time
 - `updated_at` (TIMESTAMP WITH TIME ZONE) - Last update time
+
+---
+
+### `AdapterSqliteOptions`
+
+```typescript
+interface AdapterSqliteOptions extends AdapterAbstractOptions {
+	/**
+	 * An open `node:sqlite` database, e.g. `new DatabaseSync("kv.db")`. The caller owns
+	 * it: `destroy()` never closes it, so one handle can be shared across adapters.
+	 */
+	db: DatabaseSync;
+	/**
+	 * Name of the table to use for storing key-value pairs.
+	 * The table will be created automatically if it doesn't exist.
+	 * Must match `^[A-Za-z_][A-Za-z0-9_]*$` (no `schema.` prefix).
+	 * @default "__kv"
+	 */
+	tableName: string;
+	/**
+	 * Interval in seconds for automatic cleanup of expired keys.
+	 * Set to 0 to disable automatic cleanup.
+	 */
+	ttlCleanupIntervalSec: number;
+}
+```
+
+**Connection ownership:** the adapter never opens, closes or reconfigures the handle — it
+sets no pragmas. For several processes on one file, open it with a busy timeout
+(`new DatabaseSync(path, { timeout: 5000 })`) so a locked write waits instead of failing,
+and consider `PRAGMA journal_mode = WAL`.
+
+**Atomicity:** `setIfAbsent`, `cas`, `expire` and `set` are single statements.
+`getSet`, `incr`/`decr`, `setMultiple`, `clear` and `transaction` run in `BEGIN IMMEDIATE`,
+which takes the write lock up front, so they stay atomic against other connections and
+processes. Called inside a transaction you opened on the same handle (`db.isTransaction`),
+they use a savepoint instead: their own failure rolls back only themselves, and your
+`COMMIT`/`ROLLBACK` decides the rest.
+
+**Synchronous driver:** `node:sqlite` blocks the event loop for the duration of each call.
+Every method still returns a Promise, like the other adapters.
+
+**Pattern matching** uses SQLite `GLOB`, which is case-sensitive and uses the primary-key
+index for a literal prefix. `[` is escaped, so `keys()` / `clear()` follow the same
+literal-except-`*`/`?` rules as every adapter.
+
+**Table Schema:**
+- `key` (TEXT) - Primary key
+- `value` (TEXT) - Stored value as JSON text
+- `expires_at` (INTEGER) - Expiration time as epoch milliseconds; `NULL` = no expiration
 
 ---
 

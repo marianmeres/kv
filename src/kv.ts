@@ -10,6 +10,7 @@
 import { AdapterMemory, type AdapterMemoryOptions } from "./adapter/memory.ts";
 import { AdapterPostgres, type AdapterPostgresOptions } from "./adapter/postgres.ts";
 import { AdapterRedis, type AdapterRedisOptions } from "./adapter/redis.ts";
+import { AdapterSqlite, type AdapterSqliteOptions } from "./adapter/sqlite.ts";
 
 // Re-export all types for consumers
 export type {
@@ -24,6 +25,7 @@ export { AdapterAbstract } from "./adapter/abstract.ts";
 export { AdapterMemory, type AdapterMemoryOptions } from "./adapter/memory.ts";
 export { AdapterPostgres, type AdapterPostgresOptions } from "./adapter/postgres.ts";
 export { AdapterRedis, type AdapterRedisOptions } from "./adapter/redis.ts";
+export { AdapterSqlite, type AdapterSqliteOptions } from "./adapter/sqlite.ts";
 export { sleep } from "./utils/sleep.ts";
 
 /**
@@ -34,6 +36,7 @@ interface KnownTypes {
 	memory: { options: AdapterMemoryOptions; adapter: AdapterMemory };
 	postgres: { options: AdapterPostgresOptions; adapter: AdapterPostgres };
 	redis: { options: AdapterRedisOptions; adapter: AdapterRedis };
+	sqlite: { options: AdapterSqliteOptions; adapter: AdapterSqlite };
 }
 
 /**
@@ -50,6 +53,7 @@ interface KnownTypes {
  *               - `"memory"` - In-memory storage (default, not persisted)
  *               - `"redis"` - Redis server (requires `db` option with Redis client)
  *               - `"postgres"` - PostgreSQL database (requires `db` option with pg client/pool)
+ *               - `"sqlite"` - SQLite database (requires `db` option with a `node:sqlite` `DatabaseSync`)
  * @param options - Adapter-specific configuration options.
  *
  * @returns A configured adapter instance. Call `initialize()` before use.
@@ -75,6 +79,11 @@ interface KnownTypes {
  * const pool = new pg.Pool({ connectionString: '...' });
  * const postgres = createKVClient("myapp:", "postgres", { db: pool });
  * await postgres.initialize();
+ *
+ * // SQLite storage
+ * import { DatabaseSync } from 'node:sqlite';
+ * const sqlite = createKVClient("myapp:", "sqlite", { db: new DatabaseSync("kv.db") });
+ * await sqlite.initialize();
  * ```
  */
 export function createKVClient<T extends keyof KnownTypes>(
@@ -86,6 +95,7 @@ export function createKVClient<T extends keyof KnownTypes>(
 	if (type === "memory") return new AdapterMemory(namespace, options);
 	if (type === "postgres") return new AdapterPostgres(namespace, options);
 	if (type === "redis") return new AdapterRedis(namespace, options);
+	if (type === "sqlite") return new AdapterSqlite(namespace, options);
 
 	//
 	throw new TypeError(`Unsupported KV client type "${type}"`);
