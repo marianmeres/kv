@@ -188,18 +188,25 @@ testsRunner([
 					ttlCleanupIntervalSec: 1,
 					db: _client.options.db,
 				});
-				await client.initialize();
-				await client.set(k, v);
+				// destroy even on a failed assertion: a live cleanup timer keeps the test
+				// process from exiting, and the run hangs instead of failing
+				try {
+					await client.initialize();
+					await client.set(k, v);
 
-				await sleep(1_010);
+					// The cleanup clock starts at initialize(), not at set(), so the key
+					// (expiring 1s after set) can miss the first tick by a millisecond and
+					// wait for the second, up to 2s after set.
+					await sleep(2_500);
 
-				// "missing" means expired-or-gone (ttl-related, not cleanup)
-				assert.deepEqual((await client.ttl(k)).state, "missing");
+					// "missing" means expired-or-gone (ttl-related, not cleanup)
+					assert.deepEqual((await client.ttl(k)).state, "missing");
 
-				// if not cleaned up, it wouldn't be empty
-				assert.deepEqual(await client.__debug_dump(), {});
-
-				await client.destroy();
+					// if not cleaned up, it wouldn't be empty
+					assert.deepEqual(await client.__debug_dump(), {});
+				} finally {
+					await client.destroy();
+				}
 			}
 		},
 		// only: true,

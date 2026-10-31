@@ -10,6 +10,9 @@ jobs:
   # Nothing runs on Deno or Bun.
   node:
     runs-on: ubuntu-latest
+    # A green run takes about a minute; a leaked timer or connection otherwise
+    # hangs it until GitHub's 6h default.
+    timeout-minutes: 10
     # Every test runs against all adapters, so the suite needs a real Postgres and Redis.
     services:
       postgres:
