@@ -61,14 +61,14 @@
     "rpm": "pnpm run release minor -y && pnpm run publish:all"
   },
   "dependencies": {
-    "@marianmeres/clog": "^3.21.0",
-    "@types/pg": "^8.20.0",
-    "pg": "^8.21.0",
-    "redis": "^6.0.0"
+    "@marianmeres/clog": "^3.23.0",
+    "@types/pg": "^8.23.1",
+    "pg": "^8.23.1",
+    "redis": "^6.3.1"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.6.3",
-    "@types/node": "^26.6.5",
+    "@biomejs/biome": "^2.6.4",
+    "@types/node": "^26.6.6",
     "typescript": "^7.0.2"
   }
 }

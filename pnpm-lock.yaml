@@ -167,23 +167,23 @@ importers:
   .:
     dependencies:
       '@marianmeres/clog':
-        specifier: ^3.21.0
+        specifier: ^3.23.0
         version: 3.23.0
       '@types/pg':
-        specifier: ^8.20.0
+        specifier: ^8.23.1
         version: 8.23.1
       pg:
-        specifier: ^8.21.0
+        specifier: ^8.23.1
         version: 8.23.1
       redis:
-        specifier: ^6.0.0
+        specifier: ^6.3.1
         version: 6.3.1
     devDependencies:
       '@biomejs/biome':
-        specifier: ^2.6.3
+        specifier: ^2.6.4
         version: 2.6.4
       '@types/node':
-        specifier: ^26.6.5
+        specifier: ^26.6.6
         version: 26.6.6
       typescript:
         specifier: ^7.0.2
