@@ -60,9 +60,7 @@ export interface Operation {
  * The tuple form `[key, value]` is preserved for backward compatibility;
  * the object form allows per-pair TTL that overrides `options.ttl`.
  */
-export type SetMultipleEntry =
-	| [string, any]
-	| { key: string; value: any; ttl?: number };
+export type SetMultipleEntry = [string, any] | { key: string; value: any; ttl?: number };
 
 /**
  * Result of a {@link AdapterAbstract.ttl} call.
@@ -116,10 +114,7 @@ export abstract class AdapterAbstract {
 	 * @param options - Adapter configuration options.
 	 * @throws {TypeError} If namespace doesn't end with a colon and is not empty.
 	 */
-	constructor(
-		namespace: string = "",
-		options: Partial<AdapterAbstractOptions> = {}
-	) {
+	constructor(namespace: string = "", options: Partial<AdapterAbstractOptions> = {}) {
 		this.namespace = namespace;
 		this.options = { ...this.options, ...(options || {}) };
 		this._assertValidNamespace();
@@ -137,7 +132,7 @@ export abstract class AdapterAbstract {
 	protected _assertValidNamespace() {
 		if (this.namespace && !this.namespace.endsWith(":")) {
 			throw new TypeError(
-				`Namespace must be either empty, or must end with a colon ("${this.namespace}")`
+				`Namespace must be either empty, or must end with a colon ("${this.namespace}")`,
 			);
 		}
 	}
@@ -154,7 +149,7 @@ export abstract class AdapterAbstract {
 				throw new RangeError(
 					`KV key exceeds 512-char limit (namespace + key = ${
 						this.namespace.length + key.length
-					})`
+					})`,
 				);
 			}
 		}
@@ -198,11 +193,9 @@ export abstract class AdapterAbstract {
 	 * Normalizes the polymorphic `setMultiple` input to a single shape.
 	 */
 	protected _normalizePairs(
-		entries: readonly SetMultipleEntry[]
+		entries: readonly SetMultipleEntry[],
 	): Array<{ key: string; value: any; ttl?: number }> {
-		return entries.map((e) =>
-			Array.isArray(e) ? { key: e[0], value: e[1] } : e
-		);
+		return entries.map((e) => (Array.isArray(e) ? { key: e[0], value: e[1] } : e));
 	}
 
 	/**
@@ -243,11 +236,7 @@ export abstract class AdapterAbstract {
 	 * await client.set("session:abc", { token: "xyz" }, { ttl: 3600 }); // expires in 1 hour
 	 * ```
 	 */
-	set(
-		key: string,
-		value: any,
-		options?: Partial<SetOptions>
-	): Promise<boolean> {
+	set(key: string, value: any, options?: Partial<SetOptions>): Promise<boolean> {
 		return notImplemented();
 	}
 
@@ -259,7 +248,7 @@ export abstract class AdapterAbstract {
 	setIfAbsent(
 		key: string,
 		value: any,
-		options?: Partial<SetOptions>
+		options?: Partial<SetOptions>,
 	): Promise<boolean> {
 		return notImplemented();
 	}
@@ -269,11 +258,7 @@ export abstract class AdapterAbstract {
 	 *
 	 * @returns The previous value, or `null` if the key did not exist.
 	 */
-	getSet(
-		key: string,
-		value: any,
-		options?: Partial<SetOptions>
-	): Promise<any> {
+	getSet(key: string, value: any, options?: Partial<SetOptions>): Promise<any> {
 		return notImplemented();
 	}
 
@@ -289,22 +274,14 @@ export abstract class AdapterAbstract {
 	 * @returns The new numeric value after the increment.
 	 * @throws {TypeError} If the stored value is not a number.
 	 */
-	incr(
-		key: string,
-		by?: number,
-		options?: Partial<SetOptions>
-	): Promise<number> {
+	incr(key: string, by?: number, options?: Partial<SetOptions>): Promise<number> {
 		return notImplemented();
 	}
 
 	/**
 	 * Atomically decrements a numeric value. See {@link incr} for details.
 	 */
-	decr(
-		key: string,
-		by?: number,
-		options?: Partial<SetOptions>
-	): Promise<number> {
+	decr(key: string, by?: number, options?: Partial<SetOptions>): Promise<number> {
 		return notImplemented();
 	}
 
@@ -321,7 +298,7 @@ export abstract class AdapterAbstract {
 		key: string,
 		expected: any,
 		next: any,
-		options?: Partial<SetOptions>
+		options?: Partial<SetOptions>,
 	): Promise<boolean> {
 		return notImplemented();
 	}
@@ -456,7 +433,7 @@ export abstract class AdapterAbstract {
 	 */
 	setMultiple(
 		entries: readonly SetMultipleEntry[],
-		options?: Partial<SetOptions>
+		options?: Partial<SetOptions>,
 	): Promise<boolean[]> {
 		return notImplemented();
 	}
@@ -564,9 +541,7 @@ export abstract class AdapterAbstract {
 	 * @returns A promise that resolves to an object mapping keys to their values and TTL info.
 	 * @internal
 	 */
-	__debug_dump(): Promise<
-		Record<string, { value: any; ttl: Date | null }>
-	> {
+	__debug_dump(): Promise<Record<string, { value: any; ttl: Date | null }>> {
 		return notImplemented();
 	}
 }

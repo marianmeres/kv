@@ -96,7 +96,7 @@ export class AdapterMemory extends AdapterAbstract {
 			// schedule next...
 			this.#cleanupTimer = setTimeout(
 				this.#maybeTTLCleanup.bind(this),
-				this.options.ttlCleanupIntervalSec * 1000
+				this.options.ttlCleanupIntervalSec * 1000,
 			);
 		}
 	}
@@ -126,7 +126,7 @@ export class AdapterMemory extends AdapterAbstract {
 	override async set(
 		key: string,
 		value: any,
-		options: Partial<SetOptions> = {}
+		options: Partial<SetOptions> = {},
 	): Promise<boolean> {
 		this._assertInitialized();
 		const nsKey = this._withNs(key);
@@ -142,7 +142,7 @@ export class AdapterMemory extends AdapterAbstract {
 	override async setIfAbsent(
 		key: string,
 		value: any,
-		options: Partial<SetOptions> = {}
+		options: Partial<SetOptions> = {},
 	): Promise<boolean> {
 		this._assertInitialized();
 		const nsKey = this._withNs(key);
@@ -160,7 +160,7 @@ export class AdapterMemory extends AdapterAbstract {
 	override async getSet(
 		key: string,
 		value: any,
-		options: Partial<SetOptions> = {}
+		options: Partial<SetOptions> = {},
 	): Promise<any> {
 		this._assertInitialized();
 		const previous = await this.get(key);
@@ -168,11 +168,7 @@ export class AdapterMemory extends AdapterAbstract {
 		return previous;
 	}
 
-	#incrBy(
-		key: string,
-		delta: number,
-		options: Partial<SetOptions> = {}
-	): number {
+	#incrBy(key: string, delta: number, options: Partial<SetOptions> = {}): number {
 		this._assertInitialized();
 		const nsKey = this._withNs(key);
 
@@ -196,7 +192,7 @@ export class AdapterMemory extends AdapterAbstract {
 	override async incr(
 		key: string,
 		by = 1,
-		options: Partial<SetOptions> = {}
+		options: Partial<SetOptions> = {},
 	): Promise<number> {
 		return this.#incrBy(key, by, options);
 	}
@@ -205,7 +201,7 @@ export class AdapterMemory extends AdapterAbstract {
 	override async decr(
 		key: string,
 		by = 1,
-		options: Partial<SetOptions> = {}
+		options: Partial<SetOptions> = {},
 	): Promise<number> {
 		return this.#incrBy(key, -by, options);
 	}
@@ -215,7 +211,7 @@ export class AdapterMemory extends AdapterAbstract {
 		key: string,
 		expected: any,
 		next: any,
-		options: Partial<SetOptions> = {}
+		options: Partial<SetOptions> = {},
 	): Promise<boolean> {
 		this._assertInitialized();
 		const nsKey = this._withNs(key);
@@ -306,7 +302,7 @@ export class AdapterMemory extends AdapterAbstract {
 	/** @inheritdoc */
 	override async setMultiple(
 		entries: readonly SetMultipleEntry[],
-		options: Partial<SetOptions> = {}
+		options: Partial<SetOptions> = {},
 	): Promise<boolean[]> {
 		this._assertInitialized();
 		const normalized = this._normalizePairs(entries);

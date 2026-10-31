@@ -24,22 +24,22 @@ Requires Node >= 24.12.
 ## Usage
 
 ```typescript
-import { createKVClient } from '@marianmeres/kv';
+import { createKVClient } from "@marianmeres/kv";
 
 // Basic usage with memory adapter (default)
 const client = createKVClient("my-app-namespace:");
 
 // Or specify a different adapter type
 const redisClient = createKVClient(
-    "my-app-namespace:",
-    'redis', // 'redis' | 'postgres' | 'memory'
-    { db: myRedisClient } // adapter-specific options
+	"my-app-namespace:",
+	"redis", // 'redis' | 'postgres' | 'memory'
+	{ db: myRedisClient }, // adapter-specific options
 );
 
 // Use the client
-await client.set('my:foo:key', { my: "value" });
-await client.get('my:foo:key'); // { my: "value" }
-await client.keys('my:*'); // ['my:foo:key']
+await client.set("my:foo:key", { my: "value" });
+await client.get("my:foo:key"); // { my: "value" }
+await client.keys("my:*"); // ['my:foo:key']
 ```
 
 **Important**: Namespace must end with a colon (`:`) or be an empty string.
@@ -82,9 +82,9 @@ client.ttl(key: string): Promise<TtlResult>
 
 ```typescript
 type TtlResult =
-  | { state: "missing" }
-  | { state: "no-ttl" }
-  | { state: "expires"; at: Date };
+	| { state: "missing" }
+	| { state: "no-ttl" }
+	| { state: "expires"; at: Date };
 ```
 
 ## Pattern Syntax
@@ -97,35 +97,38 @@ type TtlResult =
 
 ## Adapter Feature Matrix
 
-| Feature | Memory | Redis | PostgreSQL |
-|---|:-:|:-:|:-:|
-| Persistent | ✗ | ✓ | ✓ |
-| TTL on `set()` | ✓ | ✓ | ✓ |
-| `ttl()` → `expires`/`no-ttl`/`missing` | ✓ | ✓ | ✓ |
-| `expire()` | ✓ | ✓ | ✓ |
-| Atomic `setIfAbsent` / `incr` / `decr` / `cas` / `getSet` | ✓ | ✓ (Lua) | ✓ (UPSERT) |
-| Sorted `keys()` | ✓ | ✓ | ✓ |
-| Streaming `keysIter()` | ✓ | ✓ (SCAN) | ✓ (cursor) |
-| Per-pair TTL in `setMultiple` | ✓ | ✓ | ✓ |
-| Atomic `transaction()` | ✓ (single-threaded) | ✓ (MULTI) | ✓ (BEGIN/COMMIT) |
-| `delete()` returns real existed-flag | ✓ | ✓ | ✓ |
-| Background TTL cleanup | optional | native (Redis does it) | optional |
-| `keys()` / `clear()` | ✓ | ✓ (non-cluster only) | ✓ |
+| Feature                                                   |       Memory        |         Redis          |    PostgreSQL    |
+| --------------------------------------------------------- | :-----------------: | :--------------------: | :--------------: |
+| Persistent                                                |          ✗          |           ✓            |        ✓         |
+| TTL on `set()`                                            |          ✓          |           ✓            |        ✓         |
+| `ttl()` → `expires`/`no-ttl`/`missing`                    |          ✓          |           ✓            |        ✓         |
+| `expire()`                                                |          ✓          |           ✓            |        ✓         |
+| Atomic `setIfAbsent` / `incr` / `decr` / `cas` / `getSet` |          ✓          |        ✓ (Lua)         |    ✓ (UPSERT)    |
+| Sorted `keys()`                                           |          ✓          |           ✓            |        ✓         |
+| Streaming `keysIter()`                                    |          ✓          |        ✓ (SCAN)        |    ✓ (cursor)    |
+| Per-pair TTL in `setMultiple`                             |          ✓          |           ✓            |        ✓         |
+| Atomic `transaction()`                                    | ✓ (single-threaded) |       ✓ (MULTI)        | ✓ (BEGIN/COMMIT) |
+| `delete()` returns real existed-flag                      |          ✓          |           ✓            |        ✓         |
+| Background TTL cleanup                                    |      optional       | native (Redis does it) |     optional     |
+| `keys()` / `clear()`                                      |          ✓          |  ✓ (non-cluster only)  |        ✓         |
 
 ## Adapter-Specific Limitations
 
 ### Redis
+
 - **`keys()` and `clear()`**: Not supported in cluster mode (throws error)
 - **Namespace**: Required (cannot be empty string)
 - **Connection ownership**: If you pass a not-yet-open client to the adapter, `initialize()` opens it and `destroy()` closes it. If you pass an already-open client, the adapter leaves the connection lifecycle to you — safe to share a single client across adapters with different namespaces.
 
 ### PostgreSQL
+
 - Creates a table (default: `__kv`) in your database.
 - `tableName` must match `^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$` (word chars plus an optional `schema.` prefix).
 - `transaction()` pins a single connection from the Pool for the whole BEGIN/…/COMMIT block — safe to call against a `pg.Pool`.
 - Supports optional TTL cleanup via `ttlCleanupIntervalSec` option.
 
 ### Memory
+
 - Data is not persisted (in-memory only).
 - Supports optional TTL cleanup via `ttlCleanupIntervalSec` option.
 
@@ -146,6 +149,7 @@ Shipped as a minor release, although the first two items are breaking:
 
 **Breaking:**
 - **`ttl(key)` now returns a discriminated `TtlResult`** — `{ state: "missing" | "no-ttl" | "expires", at? }` — instead of `Date | null | false`. Migration:
+
   ```ts
   // before
   const t = await client.ttl(k);

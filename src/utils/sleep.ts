@@ -30,7 +30,7 @@ export function sleep(
 	 *
 	 * If calling directly `await sleep(x)` in a top level flow, this dance is not needed.
 	 */
-	__timeout_ref__: { id: number } = { id: -1 }
+	__timeout_ref__: { id: number } = { id: -1 },
 ): Promise<void> {
 	return new Promise((resolve) => {
 		// Node returns a Timeout object, not a number; clearTimeout accepts either

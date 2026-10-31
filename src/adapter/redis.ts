@@ -4,6 +4,7 @@
  * Redis key-value storage adapter implementation.
  */
 
+import { createClog } from "@marianmeres/clog";
 import type { RedisClientPoolType, RedisClientType } from "redis";
 import {
 	AdapterAbstract,
@@ -13,7 +14,6 @@ import {
 	type SetOptions,
 	type TtlResult,
 } from "./abstract.ts";
-import { createClog } from "@marianmeres/clog";
 
 /**
  * Configuration options for the Redis KV adapter.
@@ -140,7 +140,7 @@ export class AdapterRedis extends AdapterAbstract {
 	override async set(
 		key: string,
 		value: any,
-		options: Partial<SetOptions> = {}
+		options: Partial<SetOptions> = {},
 	): Promise<boolean> {
 		this._assertInitialized();
 		key = this._withNs(key);
@@ -160,7 +160,7 @@ export class AdapterRedis extends AdapterAbstract {
 	override async setIfAbsent(
 		key: string,
 		value: any,
-		options: Partial<SetOptions> = {}
+		options: Partial<SetOptions> = {},
 	): Promise<boolean> {
 		this._assertInitialized();
 		key = this._withNs(key);
@@ -192,7 +192,7 @@ return prev
 	override async getSet(
 		key: string,
 		value: any,
-		options: Partial<SetOptions> = {}
+		options: Partial<SetOptions> = {},
 	): Promise<any> {
 		this._assertInitialized();
 		const nsKey = this._withNs(key);
@@ -231,7 +231,7 @@ return v
 	async #incrBy(
 		key: string,
 		delta: number,
-		options: Partial<SetOptions> = {}
+		options: Partial<SetOptions> = {},
 	): Promise<number> {
 		this._assertInitialized();
 		const nsKey = this._withNs(key);
@@ -261,7 +261,7 @@ return v
 	override incr(
 		key: string,
 		by = 1,
-		options: Partial<SetOptions> = {}
+		options: Partial<SetOptions> = {},
 	): Promise<number> {
 		return this.#incrBy(key, by, options);
 	}
@@ -270,7 +270,7 @@ return v
 	override decr(
 		key: string,
 		by = 1,
-		options: Partial<SetOptions> = {}
+		options: Partial<SetOptions> = {},
 	): Promise<number> {
 		return this.#incrBy(key, -by, options);
 	}
@@ -296,7 +296,7 @@ return 0
 		key: string,
 		expected: any,
 		next: any,
-		options: Partial<SetOptions> = {}
+		options: Partial<SetOptions> = {},
 	): Promise<boolean> {
 		this._assertInitialized();
 		const nsKey = this._withNs(key);
@@ -305,7 +305,7 @@ return 0
 
 		if (next === undefined) next = null;
 		const expectedSerialized = JSON.stringify(
-			expected === undefined ? null : expected
+			expected === undefined ? null : expected,
 		);
 		const nextSerialized = JSON.stringify(next);
 
@@ -389,9 +389,7 @@ return 0
 		const { db, isCluster } = this.options;
 
 		if (isCluster) {
-			throw new Error(
-				"Pattern-based clear is not supported in Redis Cluster mode"
-			);
+			throw new Error("Pattern-based clear is not supported in Redis Cluster mode");
 		}
 
 		const keys: string[] = await this.keys(pattern);
@@ -405,7 +403,7 @@ return 0
 	/** @inheritdoc */
 	override async setMultiple(
 		entries: readonly SetMultipleEntry[],
-		options: Partial<SetOptions> = {}
+		options: Partial<SetOptions> = {},
 	): Promise<boolean[]> {
 		this._assertInitialized();
 
@@ -418,7 +416,7 @@ return 0
 			pipeline.set(
 				this._withNs(key),
 				JSON.stringify(value === undefined ? null : value),
-				ttl ? { EX: ttl } : {}
+				ttl ? { EX: ttl } : {},
 			);
 		}
 

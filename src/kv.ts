@@ -8,25 +8,22 @@
  */
 
 import { AdapterMemory, type AdapterMemoryOptions } from "./adapter/memory.ts";
-import {
-	AdapterPostgres,
-	type AdapterPostgresOptions,
-} from "./adapter/postgres.ts";
+import { AdapterPostgres, type AdapterPostgresOptions } from "./adapter/postgres.ts";
 import { AdapterRedis, type AdapterRedisOptions } from "./adapter/redis.ts";
 
 // Re-export all types for consumers
 export type {
-	SetOptions,
-	AdapterInfo,
 	AdapterAbstractOptions,
+	AdapterInfo,
 	Operation,
-	TtlResult,
 	SetMultipleEntry,
+	SetOptions,
+	TtlResult,
 } from "./adapter/abstract.ts";
 export { AdapterAbstract } from "./adapter/abstract.ts";
 export { AdapterMemory, type AdapterMemoryOptions } from "./adapter/memory.ts";
-export { AdapterRedis, type AdapterRedisOptions } from "./adapter/redis.ts";
 export { AdapterPostgres, type AdapterPostgresOptions } from "./adapter/postgres.ts";
+export { AdapterRedis, type AdapterRedisOptions } from "./adapter/redis.ts";
 export { sleep } from "./utils/sleep.ts";
 
 /**
@@ -83,7 +80,7 @@ interface KnownTypes {
 export function createKVClient<T extends keyof KnownTypes>(
 	namespace: string = "",
 	type: T = "memory" as T,
-	options: Partial<KnownTypes[T]["options"]> = {}
+	options: Partial<KnownTypes[T]["options"]> = {},
 ): KnownTypes[T]["adapter"] {
 	//
 	if (type === "memory") return new AdapterMemory(namespace, options);

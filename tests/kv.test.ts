@@ -1,8 +1,8 @@
+import assert from "node:assert/strict";
 import { createKVClient } from "../src/kv.ts";
 import { sleep } from "../src/utils/sleep.ts";
-import { testsRunner } from "./_tests-runner.ts";
-import assert from "node:assert/strict";
 import { createRedis } from "./_redis.ts";
+import { testsRunner } from "./_tests-runner.ts";
 
 const k = "foo:bar";
 const v = "baz";
@@ -164,7 +164,7 @@ testsRunner([
 				assert.deepEqual(
 					res,
 					[true, { hey: "ho" }, true, true],
-					`(Type: ${_type})`
+					`(Type: ${_type})`,
 				);
 				assert.deepEqual(await client.keys("foo:*"), ["foo:2"]);
 				// console.log(await client.__debug_dump());
@@ -226,12 +226,12 @@ testsRunner([
 				assert.deepEqual(
 					await client.exists("nullish"),
 					true,
-					`(${_type}) key with null value must still exist`
+					`(${_type}) key with null value must still exist`,
 				);
 				assert.deepEqual(
 					await client.exists("never-set"),
 					false,
-					`(${_type}) missing key must not exist`
+					`(${_type}) missing key must not exist`,
 				);
 			}
 		},
@@ -249,14 +249,14 @@ testsRunner([
 				assert.deepEqual(
 					await client.keys("*"),
 					["a.1", "a.2", "b1"],
-					`(${_type}) keys must be sorted`
+					`(${_type}) keys must be sorted`,
 				);
 
 				// "." in the pattern is a literal, not a regex wildcard
 				assert.deepEqual(
 					(await client.keys("a.*")).toSorted(),
 					["a.1", "a.2"],
-					`(${_type}) dot is literal`
+					`(${_type}) dot is literal`,
 				);
 
 				// "a?1" matches "a.1" (? = any single char), not "b1"
@@ -282,7 +282,7 @@ testsRunner([
 					assert.deepEqual(
 						tA.state,
 						"expires",
-						`(${_type}) defaultTtl should apply`
+						`(${_type}) defaultTtl should apply`,
 					);
 
 					// explicit ttl:0 -> no expiration
@@ -291,7 +291,7 @@ testsRunner([
 					assert.deepEqual(
 						tB.state,
 						"no-ttl",
-						`(${_type}) ttl:0 must disable expiration`
+						`(${_type}) ttl:0 must disable expiration`,
 					);
 				} finally {
 					await client.clear("*");
@@ -328,13 +328,13 @@ testsRunner([
 				const t = await client.ttl("tx:ttl");
 				assert(
 					t.state === "expires",
-					`(${_type}) transaction must honor options.ttl`
+					`(${_type}) transaction must honor options.ttl`,
 				);
 				// within a few seconds of now + 120s
 				const diff = t.at.valueOf() - Date.now();
 				assert(
 					diff > 100_000 && diff < 130_000,
-					`(${_type}) expected ~120s, got ${diff}ms`
+					`(${_type}) expected ~120s, got ${diff}ms`,
 				);
 			}
 		},
@@ -351,14 +351,14 @@ testsRunner([
 						{ type: "set", key: "rollback:good", value: "keep-me" },
 						{ type: "set", key: longKey, value: "boom" },
 					]),
-				Error
+				Error,
 			);
 
 			// The first set must have been rolled back with the second's failure.
 			assert.deepEqual(
 				await client.get("rollback:good"),
 				null,
-				"postgres transaction must roll back prior set on error"
+				"postgres transaction must roll back prior set on error",
 			);
 		},
 	},
@@ -369,7 +369,10 @@ testsRunner([
 			await client.set("p", { a: 1 });
 			const p = client.get("p");
 			// Must be Promise-chainable — not a raw object
-			assert(p && typeof (p as any).then === "function", "get() must return a Promise");
+			assert(
+				p && typeof (p as any).then === "function",
+				"get() must return a Promise",
+			);
 			const v = await p;
 			assert.deepEqual(v, { a: 1 });
 		},
@@ -436,7 +439,7 @@ testsRunner([
 			assert(
 				(results[0][1] === "a" && results[1][1] === "b") ||
 					(results[0][1] === "b" && results[1][1] === "a"),
-				`Each transaction must observe its own set: ${JSON.stringify(results)}`
+				`Each transaction must observe its own set: ${JSON.stringify(results)}`,
 			);
 
 			// Also verify the Pool is not leaking clients (idle count returns to baseline).
@@ -445,7 +448,7 @@ testsRunner([
 			if (typeof pool.totalCount === "number") {
 				assert(
 					pool.totalCount < 10,
-					`pool should not leak: totalCount=${pool.totalCount}`
+					`pool should not leak: totalCount=${pool.totalCount}`,
 				);
 			}
 		},
@@ -469,10 +472,7 @@ testsRunner([
 			await b.initialize();
 			assert(dbB.isOpen, "adapter should have opened the connection");
 			await b.destroy();
-			assert(
-				!dbB.isOpen,
-				"adapter-opened connection must be closed on destroy"
-			);
+			assert(!dbB.isOpen, "adapter-opened connection must be closed on destroy");
 		},
 	},
 	{
@@ -508,17 +508,17 @@ testsRunner([
 				assert.deepEqual(
 					await client.setIfAbsent("lock", "a"),
 					true,
-					`(${_type}) first set must succeed`
+					`(${_type}) first set must succeed`,
 				);
 				assert.deepEqual(
 					await client.setIfAbsent("lock", "b"),
 					false,
-					`(${_type}) second set must fail`
+					`(${_type}) second set must fail`,
 				);
 				assert.deepEqual(
 					await client.get("lock"),
 					"a",
-					`(${_type}) value must not have been overwritten`
+					`(${_type}) value must not have been overwritten`,
 				);
 			}
 		},
@@ -533,7 +533,7 @@ testsRunner([
 				assert.deepEqual(
 					await client.setIfAbsent("exp", "new"),
 					true,
-					`(${_type}) setIfAbsent should succeed on expired key`
+					`(${_type}) setIfAbsent should succeed on expired key`,
 				);
 				assert.deepEqual(await client.get("exp"), "new");
 			}
@@ -546,15 +546,13 @@ testsRunner([
 				await client.clear("*");
 				const N = 50;
 				const results = await Promise.all(
-					Array.from({ length: N }, (_, i) =>
-						client.setIfAbsent("winner", i)
-					)
+					Array.from({ length: N }, (_, i) => client.setIfAbsent("winner", i)),
 				);
 				const wins = results.filter(Boolean).length;
 				assert.deepEqual(
 					wins,
 					1,
-					`(${_type}) expected exactly one winner, got ${wins}`
+					`(${_type}) expected exactly one winner, got ${wins}`,
 				);
 			}
 		},
@@ -584,7 +582,7 @@ testsRunner([
 				await assert.rejects(
 					() => client.incr("s"),
 					{ name: "TypeError", message: /not a number/ },
-					`(${_type}) incr on string must throw TypeError`
+					`(${_type}) incr on string must throw TypeError`,
 				);
 			}
 		},
@@ -596,12 +594,12 @@ testsRunner([
 				await client.clear("*");
 				const N = 100;
 				await Promise.all(
-					Array.from({ length: N }, () => client.incr("counter"))
+					Array.from({ length: N }, () => client.incr("counter")),
 				);
 				assert.deepEqual(
 					await client.get("counter"),
 					N,
-					`(${_type}) ${N} parallel increments should sum to ${N}`
+					`(${_type}) ${N} parallel increments should sum to ${N}`,
 				);
 			}
 		},
@@ -616,7 +614,7 @@ testsRunner([
 				assert.deepEqual(
 					await client.getSet("k", 1),
 					null,
-					`(${_type}) getSet missing returns null`
+					`(${_type}) getSet missing returns null`,
 				);
 				assert.deepEqual(await client.get("k"), 1);
 
@@ -644,7 +642,7 @@ testsRunner([
 				assert.deepEqual(
 					await client.cas("x", null, "new"),
 					false,
-					`(${_type}) missing key must fail cas even with expected=null`
+					`(${_type}) missing key must fail cas even with expected=null`,
 				);
 
 				await client.set("x", "a");
@@ -684,7 +682,7 @@ testsRunner([
 				assert.deepEqual(
 					collected.toSorted(),
 					["a", "b", "c"],
-					`(${_type}) keysIter must yield all matches`
+					`(${_type}) keysIter must yield all matches`,
 				);
 			}
 		},
@@ -695,9 +693,7 @@ testsRunner([
 			const client = clients.postgres;
 			await client.clear("*");
 			// Insert 30 keys
-			await client.setMultiple(
-				Array.from({ length: 30 }, (_, i) => [`k${i}`, i])
-			);
+			await client.setMultiple(Array.from({ length: 30 }, (_, i) => [`k${i}`, i]));
 
 			// Open 20 iterators, break out of each after 1 yield
 			for (let i = 0; i < 20; i++) {
@@ -712,7 +708,7 @@ testsRunner([
 			if (typeof pool.totalCount === "number") {
 				assert(
 					pool.totalCount < 10,
-					`pool should not leak on early break: totalCount=${pool.totalCount}`
+					`pool should not leak on early break: totalCount=${pool.totalCount}`,
 				);
 			}
 		},
@@ -724,23 +720,22 @@ testsRunner([
 				await client.clear("*");
 
 				await client.setMultiple(
-					[
-						["long", "v"],
-						{ key: "short", value: "v", ttl: 2 },
-					],
-					{ ttl: 300 }
+					[["long", "v"], { key: "short", value: "v", ttl: 2 }],
+					{ ttl: 300 },
 				);
 
 				const tLong = await client.ttl("long");
 				const tShort = await client.ttl("short");
 
 				assert(
-					tLong.state === "expires" && tLong.at.valueOf() > Date.now() + 200_000,
-					`(${_type}) batch TTL should apply to "long"`
+					tLong.state === "expires" &&
+						tLong.at.valueOf() > Date.now() + 200_000,
+					`(${_type}) batch TTL should apply to "long"`,
 				);
 				assert(
-					tShort.state === "expires" && tShort.at.valueOf() < Date.now() + 5_000,
-					`(${_type}) per-pair ttl=2s should override batch ttl for "short"`
+					tShort.state === "expires" &&
+						tShort.at.valueOf() < Date.now() + 5_000,
+					`(${_type}) per-pair ttl=2s should override batch ttl for "short"`,
 				);
 			}
 		},
@@ -766,17 +761,17 @@ testsRunner([
 				await assert.rejects(
 					() => client.set("", "v"),
 					{ name: "TypeError", message: /non-empty/ },
-					`(${_type}) empty key must throw`
+					`(${_type}) empty key must throw`,
 				);
 				await assert.rejects(
 					() => client.set("bad\0key", "v"),
 					{ name: "TypeError", message: /null characters/ },
-					`(${_type}) null-char key must throw`
+					`(${_type}) null-char key must throw`,
 				);
 				await assert.rejects(
 					() => client.set("x".repeat(600), "v"),
 					{ name: "RangeError", message: /512-char/ },
-					`(${_type}) oversize key must throw`
+					`(${_type}) oversize key must throw`,
 				);
 			}
 		},
@@ -827,7 +822,7 @@ testsRunner([
 				for (const m of methods) {
 					assert(
 						typeof (client as any)[m] === "function",
-						`(${type}) missing method: ${m}`
+						`(${type}) missing method: ${m}`,
 					);
 				}
 			}
@@ -850,7 +845,7 @@ testsRunner([
 				assert.deepEqual(
 					(await client.ttl("plain")).state,
 					"no-ttl",
-					`(${_type}) set without ttl should be no-ttl`
+					`(${_type}) set without ttl should be no-ttl`,
 				);
 
 				// existing, with ttl
@@ -858,7 +853,7 @@ testsRunner([
 				const t = await client.ttl("tick");
 				assert(
 					t.state === "expires" && t.at instanceof Date,
-					`(${_type}) ttl-bearing key should be "expires"`
+					`(${_type}) ttl-bearing key should be "expires"`,
 				);
 			}
 		},

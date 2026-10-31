@@ -4,16 +4,16 @@
  * PostgreSQL key-value storage adapter implementation.
  */
 
+import { createClog } from "@marianmeres/clog";
+import type pg from "pg";
 import {
 	AdapterAbstract,
+	type AdapterAbstractOptions,
 	type Operation,
 	type SetMultipleEntry,
 	type SetOptions,
 	type TtlResult,
-	type AdapterAbstractOptions,
 } from "./abstract.ts";
-import { createClog } from "@marianmeres/clog";
-import type pg from "pg";
 
 /**
  * Configuration options for the PostgreSQL KV adapter.
@@ -38,7 +38,10 @@ export interface AdapterPostgresOptions extends AdapterAbstractOptions {
 
 /** Minimal subset of pg.ClientBase used by this adapter. */
 type PgExecutor = {
-	query: (sql: string, params?: any[]) => Promise<{ rows: any[]; rowCount: number | null }>;
+	query: (
+		sql: string,
+		params?: any[],
+	) => Promise<{ rows: any[]; rowCount: number | null }>;
 };
 
 /**
@@ -70,10 +73,12 @@ export class AdapterPostgres extends AdapterAbstract {
 		// validate tableName — it is spliced into SQL verbatim, so guard
 		// against surprises. Allow optional schema prefix (one dot).
 		if (
-			!/^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$/.test(this.options.tableName)
+			!/^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$/.test(
+				this.options.tableName,
+			)
 		) {
 			throw new Error(
-				`Invalid tableName "${this.options.tableName}". Only word characters and a single "schema." prefix are allowed.`
+				`Invalid tableName "${this.options.tableName}". Only word characters and a single "schema." prefix are allowed.`,
 			);
 		}
 	}
@@ -143,7 +148,7 @@ export class AdapterPostgres extends AdapterAbstract {
 			// schedule next...
 			this.#cleanupTimer = setTimeout(
 				this.#maybeTTLCleanup.bind(this),
-				this.options.ttlCleanupIntervalSec * 1000
+				this.options.ttlCleanupIntervalSec * 1000,
 			);
 		}
 	}
@@ -173,7 +178,7 @@ export class AdapterPostgres extends AdapterAbstract {
 	override set(
 		key: string,
 		value: any,
-		options: Partial<SetOptions> = {}
+		options: Partial<SetOptions> = {},
 	): Promise<boolean> {
 		return this.#setOn(this.options.db, key, value, options);
 	}
@@ -182,7 +187,7 @@ export class AdapterPostgres extends AdapterAbstract {
 		exec: PgExecutor,
 		key: string,
 		value: any,
-		options: Partial<SetOptions> = {}
+		options: Partial<SetOptions> = {},
 	): Promise<boolean> {
 		this._assertInitialized();
 		key = this._withNs(key);
@@ -198,7 +203,7 @@ export class AdapterPostgres extends AdapterAbstract {
                 value = EXCLUDED.value,
                 expires_at = EXCLUDED.expires_at,
                 updated_at = NOW()`,
-			[key, JSON.stringify(value ?? null), expiresAt]
+			[key, JSON.stringify(value ?? null), expiresAt],
 		);
 
 		return true;
@@ -208,7 +213,7 @@ export class AdapterPostgres extends AdapterAbstract {
 	override async setIfAbsent(
 		key: string,
 		value: any,
-		options: Partial<SetOptions> = {}
+		options: Partial<SetOptions> = {},
 	): Promise<boolean> {
 		this._assertInitialized();
 		const nsKey = this._withNs(key);
@@ -226,7 +231,7 @@ export class AdapterPostgres extends AdapterAbstract {
                 expires_at = EXCLUDED.expires_at,
                 updated_at = NOW()
             WHERE ${tableName}.expires_at IS NOT NULL AND ${tableName}.expires_at <= NOW()`,
-			[nsKey, JSON.stringify(value ?? null), expiresAt]
+			[nsKey, JSON.stringify(value ?? null), expiresAt],
 		);
 		return (rowCount ?? 0) > 0;
 	}
@@ -235,7 +240,7 @@ export class AdapterPostgres extends AdapterAbstract {
 	override async getSet(
 		key: string,
 		value: any,
-		options: Partial<SetOptions> = {}
+		options: Partial<SetOptions> = {},
 	): Promise<any> {
 		this._assertInitialized();
 		const nsKey = this._withNs(key);
@@ -258,7 +263,7 @@ export class AdapterPostgres extends AdapterAbstract {
                 RETURNING 1
             )
             SELECT (SELECT value FROM prev) AS prev`,
-			[nsKey, JSON.stringify(value ?? null), expiresAt]
+			[nsKey, JSON.stringify(value ?? null), expiresAt],
 		);
 		return rows[0]?.prev ?? null;
 	}
@@ -266,7 +271,7 @@ export class AdapterPostgres extends AdapterAbstract {
 	async #incrBy(
 		key: string,
 		delta: number,
-		options: Partial<SetOptions> = {}
+		options: Partial<SetOptions> = {},
 	): Promise<number> {
 		this._assertInitialized();
 		const nsKey = this._withNs(key);
@@ -295,7 +300,7 @@ export class AdapterPostgres extends AdapterAbstract {
                     END,
                     updated_at = NOW()
                 RETURNING value`,
-				[nsKey, delta, expiresAt]
+				[nsKey, delta, expiresAt],
 			);
 			return Number(rows[0].value);
 		} catch (err: any) {
@@ -313,7 +318,7 @@ export class AdapterPostgres extends AdapterAbstract {
 	override incr(
 		key: string,
 		by = 1,
-		options: Partial<SetOptions> = {}
+		options: Partial<SetOptions> = {},
 	): Promise<number> {
 		return this.#incrBy(key, by, options);
 	}
@@ -322,7 +327,7 @@ export class AdapterPostgres extends AdapterAbstract {
 	override decr(
 		key: string,
 		by = 1,
-		options: Partial<SetOptions> = {}
+		options: Partial<SetOptions> = {},
 	): Promise<number> {
 		return this.#incrBy(key, -by, options);
 	}
@@ -332,7 +337,7 @@ export class AdapterPostgres extends AdapterAbstract {
 		key: string,
 		expected: any,
 		next: any,
-		options: Partial<SetOptions> = {}
+		options: Partial<SetOptions> = {},
 	): Promise<boolean> {
 		this._assertInitialized();
 		const nsKey = this._withNs(key);
@@ -377,7 +382,7 @@ export class AdapterPostgres extends AdapterAbstract {
 			`SELECT value, expires_at
             FROM ${tableName}
             WHERE key = $1 AND (expires_at IS NULL OR expires_at > NOW())`,
-			[key]
+			[key],
 		);
 
 		if (rows.length === 0) return null;
@@ -395,10 +400,9 @@ export class AdapterPostgres extends AdapterAbstract {
 		key = this._withNs(key);
 
 		const { tableName } = this.options;
-		const { rowCount } = await exec.query(
-			`DELETE FROM ${tableName} WHERE key = $1`,
-			[key]
-		);
+		const { rowCount } = await exec.query(`DELETE FROM ${tableName} WHERE key = $1`, [
+			key,
+		]);
 
 		return rowCount! > 0;
 	}
@@ -412,7 +416,7 @@ export class AdapterPostgres extends AdapterAbstract {
 		const { rows } = await db.query(
 			`SELECT 1 FROM ${tableName}
             WHERE key = $1 AND (expires_at IS NULL OR expires_at > NOW())`,
-			[key]
+			[key],
 		);
 
 		return rows.length > 0;
@@ -429,7 +433,7 @@ export class AdapterPostgres extends AdapterAbstract {
             WHERE key LIKE $1${this.#likeEscape}
             AND (expires_at IS NULL OR expires_at > NOW())
             ORDER BY key`,
-			[this.#withNsLike(pattern)]
+			[this.#withNsLike(pattern)],
 		);
 		return rows.map((row) => this._withoutNs(row.key)).toSorted();
 	}
@@ -454,7 +458,7 @@ export class AdapterPostgres extends AdapterAbstract {
                 WHERE key LIKE $1${this.#likeEscape}
                 AND (expires_at IS NULL OR expires_at > NOW())
                 ORDER BY key`,
-				[this.#withNsLike(pattern)]
+				[this.#withNsLike(pattern)],
 			);
 			while (true) {
 				const { rows } = await client.query(`FETCH 500 FROM ${cursorName}`);
@@ -501,7 +505,7 @@ export class AdapterPostgres extends AdapterAbstract {
 				`DELETE FROM ${tableName} WHERE key IN (
 					SELECT key FROM ${tableName} WHERE key LIKE $1${this.#likeEscape} LIMIT $2
 				)`,
-				[likePattern, batchSize]
+				[likePattern, batchSize],
 			);
 			deleted = rowCount ?? 0;
 			totalDeleted += deleted;
@@ -513,7 +517,7 @@ export class AdapterPostgres extends AdapterAbstract {
 	/** @inheritdoc */
 	override async setMultiple(
 		entries: readonly SetMultipleEntry[],
-		options: Partial<SetOptions> = {}
+		options: Partial<SetOptions> = {},
 	): Promise<boolean[]> {
 		this._assertInitialized();
 
@@ -529,11 +533,7 @@ export class AdapterPostgres extends AdapterAbstract {
 			const ttl = this._resolveTtl({ ttl: pairTtl ?? options.ttl });
 			const expiresAt = ttl ? new Date(Date.now() + ttl * 1000) : null;
 			placeholders.push(`($${idx++}, $${idx++}, $${idx++})`);
-			params.push(
-				this._withNs(key),
-				JSON.stringify(value ?? null),
-				expiresAt
-			);
+			params.push(this._withNs(key), JSON.stringify(value ?? null), expiresAt);
 		}
 
 		const sql = `
@@ -592,7 +592,7 @@ export class AdapterPostgres extends AdapterAbstract {
 			`UPDATE ${tableName}
             SET expires_at = $2, updated_at = NOW()
             WHERE key = $1 AND (expires_at IS NULL OR expires_at > NOW())`,
-			[key, expiresAt]
+			[key, expiresAt],
 		);
 
 		return rowCount! > 0;
@@ -607,7 +607,7 @@ export class AdapterPostgres extends AdapterAbstract {
 
 		const { rows } = await db.query(
 			`SELECT expires_at FROM ${tableName} WHERE key = $1`,
-			[key]
+			[key],
 		);
 
 		if (rows.length === 0) return { state: "missing" };
@@ -648,7 +648,12 @@ export class AdapterPostgres extends AdapterAbstract {
 					switch (op.type) {
 						case "set":
 							results.push(
-								await this.#setOn(client, op.key, op.value, op.options || {})
+								await this.#setOn(
+									client,
+									op.key,
+									op.value,
+									op.options || {},
+								),
 							);
 							break;
 						case "get":
@@ -684,7 +689,7 @@ export class AdapterPostgres extends AdapterAbstract {
 
 		const { rows } = await db.query(
 			`SELECT key, value, expires_at FROM ${tableName} WHERE key LIKE $1${this.#likeEscape}`,
-			[this.#withNsLike("*")]
+			[this.#withNsLike("*")],
 		);
 
 		return rows.reduce<Record<string, { value: unknown; ttl: Date | null }>>(
@@ -695,7 +700,7 @@ export class AdapterPostgres extends AdapterAbstract {
 				};
 				return m;
 			},
-			{}
+			{},
 		);
 	}
 }

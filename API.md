@@ -20,10 +20,10 @@ Creates and returns a KV client configured for the specified storage backend.
 
 ```typescript
 function createKVClient<T extends keyof KnownTypes>(
-  namespace: string = "",
-  type: T = "memory",
-  options: Partial<KnownTypes[T]["options"]> = {}
-): KnownTypes[T]["adapter"]
+	namespace: string = "",
+	type: T = "memory",
+	options: Partial<KnownTypes[T]["options"]> = {},
+): KnownTypes[T]["adapter"];
 ```
 
 **Type Parameters:**
@@ -31,11 +31,11 @@ function createKVClient<T extends keyof KnownTypes>(
 
 **Parameters:**
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `namespace` | `string` | `""` | Key prefix applied to all operations. Must end with `:` or be empty. |
-| `type` | `"memory" \| "redis" \| "postgres"` | `"memory"` | The storage backend to use. |
-| `options` | `Partial<AdapterOptions>` | `{}` | Adapter-specific configuration options. |
+| Parameter   | Type                                | Default    | Description                                                          |
+| ----------- | ----------------------------------- | ---------- | -------------------------------------------------------------------- |
+| `namespace` | `string`                            | `""`       | Key prefix applied to all operations. Must end with `:` or be empty. |
+| `type`      | `"memory" \| "redis" \| "postgres"` | `"memory"` | The storage backend to use.                                          |
+| `options`   | `Partial<AdapterOptions>`           | `{}`       | Adapter-specific configuration options.                              |
 
 **Returns:** A configured adapter instance. Call `initialize()` before use.
 
@@ -98,9 +98,9 @@ destroy(hard?: boolean): Promise<void>
 
 **Parameters:**
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `hard` | `boolean` | `false` | If `true`, performs a hard cleanup (e.g., drops tables in PostgreSQL). |
+| Parameter | Type      | Default | Description                                                            |
+| --------- | --------- | ------- | ---------------------------------------------------------------------- |
+| `hard`    | `boolean` | `false` | If `true`, performs a hard cleanup (e.g., drops tables in PostgreSQL). |
 
 ---
 
@@ -135,11 +135,11 @@ Values are automatically serialized to JSON. If the key already exists, it will 
 
 **Parameters:**
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `key` | `string` | The key to store the value under. |
-| `value` | `any` | The value to store. Can be any JSON-serializable value. `undefined` is stored as `null`. |
-| `options` | `Partial<SetOptions>` | Optional settings including TTL. |
+| Parameter | Type                  | Description                                                                              |
+| --------- | --------------------- | ---------------------------------------------------------------------------------------- |
+| `key`     | `string`              | The key to store the value under.                                                        |
+| `value`   | `any`                 | The value to store. Can be any JSON-serializable value. `undefined` is stored as `null`. |
+| `options` | `Partial<SetOptions>` | Optional settings including TTL.                                                         |
 
 **Returns:** `Promise<boolean>` - `true` if the operation was successful.
 
@@ -173,7 +173,7 @@ setIfAbsent(key: string, value: any, options?: Partial<SetOptions>): Promise<boo
 
 ```typescript
 if (await client.setIfAbsent("lock:job:42", { by: "worker-1" }, { ttl: 30 })) {
-  // we got the lock
+	// we got the lock
 }
 ```
 
@@ -204,11 +204,11 @@ decr(key: string, by?: number, options?: Partial<SetOptions>): Promise<number>
 
 **Parameters:**
 
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `key` | `string` | — | The key to increment |
-| `by` | `number` | `1` | Amount to add (or subtract for `decr`) |
-| `options` | `Partial<SetOptions>` | — | TTL only applies on key creation — existing keys keep their TTL |
+| Parameter | Type                  | Default | Description                                                     |
+| --------- | --------------------- | ------- | --------------------------------------------------------------- |
+| `key`     | `string`              | —       | The key to increment                                            |
+| `by`      | `number`              | `1`     | Amount to add (or subtract for `decr`)                          |
+| `options` | `Partial<SetOptions>` | —       | TTL only applies on key creation — existing keys keep their TTL |
 
 **Returns:** the new value after the operation.
 
@@ -217,9 +217,9 @@ decr(key: string, by?: number, options?: Partial<SetOptions>): Promise<number>
 **Example:**
 
 ```typescript
-await client.incr("views");           // creates "views" = 1
-await client.incr("views", 10);       // now 11
-await client.decr("views", 3);        // now 8
+await client.incr("views"); // creates "views" = 1
+await client.incr("views", 10); // now 11
+await client.decr("views", 3); // now 8
 
 // Sliding window: TTL only applied on first hit
 await client.incr("rate:user:1", 1, { ttl: 60 });
@@ -246,7 +246,9 @@ When `options.ttl` is supplied, the stored expiration is updated on success. Whe
 ```typescript
 const current = await client.get("counter");
 const swapped = await client.cas("counter", current, current + 1);
-if (!swapped) { /* retry or reconcile */ }
+if (!swapped) {
+	/* retry or reconcile */
+}
 ```
 
 ---
@@ -261,9 +263,9 @@ get(key: string): Promise<any>
 
 **Parameters:**
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `key` | `string` | The key to retrieve. |
+| Parameter | Type     | Description          |
+| --------- | -------- | -------------------- |
+| `key`     | `string` | The key to retrieve. |
 
 **Returns:** `Promise<any>` - The stored value, or `null` if the key doesn't exist or has expired.
 
@@ -272,7 +274,7 @@ get(key: string): Promise<any>
 ```typescript
 const user = await client.get("user:123");
 if (user) {
-  console.log(user.name);
+	console.log(user.name);
 }
 ```
 
@@ -288,9 +290,9 @@ delete(key: string): Promise<boolean>
 
 **Parameters:**
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `key` | `string` | The key to delete. |
+| Parameter | Type     | Description        |
+| --------- | -------- | ------------------ |
+| `key`     | `string` | The key to delete. |
 
 **Returns:** `Promise<boolean>` - `true` if the key existed and was deleted, `false` if it didn't exist.
 
@@ -306,9 +308,9 @@ exists(key: string): Promise<boolean>
 
 **Parameters:**
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `key` | `string` | The key to check. |
+| Parameter | Type     | Description       |
+| --------- | -------- | ----------------- |
+| `key`     | `string` | The key to check. |
 
 **Returns:** `Promise<boolean>` - `true` if the key exists and hasn't expired.
 
@@ -326,10 +328,10 @@ expire(key: string, ttl: number): Promise<boolean>
 
 **Parameters:**
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `key` | `string` | The key to set expiration on. |
-| `ttl` | `number` | Time-to-live in seconds from now. |
+| Parameter | Type     | Description                       |
+| --------- | -------- | --------------------------------- |
+| `key`     | `string` | The key to set expiration on.     |
+| `ttl`     | `number` | Time-to-live in seconds from now. |
 
 **Returns:** `Promise<boolean>` - `true` if the expiration was set, `false` if the key doesn't exist.
 
@@ -357,9 +359,9 @@ type TtlResult =
 
 **Parameters:**
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `key` | `string` | The key to check. |
+| Parameter | Type     | Description       |
+| --------- | -------- | ----------------- |
+| `key`     | `string` | The key to check. |
 
 **Returns:** A `TtlResult`. Switch on `.state`:
 - `"missing"` — key doesn't exist (or has expired)
@@ -371,9 +373,15 @@ type TtlResult =
 ```typescript
 const t = await client.ttl("session:abc");
 switch (t.state) {
-  case "expires": console.log(`Expires at ${t.at.toISOString()}`); break;
-  case "no-ttl":  console.log("No expiration set"); break;
-  case "missing": console.log("Key does not exist"); break;
+	case "expires":
+		console.log(`Expires at ${t.at.toISOString()}`);
+		break;
+	case "no-ttl":
+		console.log("No expiration set");
+		break;
+	case "missing":
+		console.log("Key does not exist");
+		break;
 }
 ```
 
@@ -412,8 +420,8 @@ Uses Redis-style wildcard patterns:
 
 **Parameters:**
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
+| Parameter | Type     | Description                                                            |
+| --------- | -------- | ---------------------------------------------------------------------- |
 | `pattern` | `string` | The pattern to match keys against (e.g., `"user:*"`, `"session:???"`). |
 
 **Returns:** `Promise<string[]>` - Array of matching keys (without namespace prefix), sorted alphabetically.
@@ -451,7 +459,7 @@ Ordering is not guaranteed across adapters — use `keys()` if you need sorted o
 
 ```typescript
 for await (const k of client.keysIter("user:*")) {
-  if (someCondition(k)) break; // safe — cursor is released
+	if (someCondition(k)) break; // safe — cursor is released
 }
 ```
 
@@ -469,8 +477,8 @@ Uses the same pattern syntax as `keys()`.
 
 **Parameters:**
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
+| Parameter | Type     | Description                        |
+| --------- | -------- | ---------------------------------- |
 | `pattern` | `string` | The pattern to match keys against. |
 
 **Returns:** `Promise<number>` - The number of keys deleted.
@@ -505,10 +513,10 @@ More efficient than multiple individual `set` calls, especially for Redis and Po
 
 **Parameters:**
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `entries` | `[string, any][]` or `{ key, value, ttl? }[]` | Pairs to store. |
-| `options` | `Partial<SetOptions>` | Fallback TTL used when a pair has no explicit `ttl`. |
+| Parameter | Type                                          | Description                                          |
+| --------- | --------------------------------------------- | ---------------------------------------------------- |
+| `entries` | `[string, any][]` or `{ key, value, ttl? }[]` | Pairs to store.                                      |
+| `options` | `Partial<SetOptions>`                         | Fallback TTL used when a pair has no explicit `ttl`. |
 
 **Returns:** `Promise<boolean[]>` — one per entry.
 
@@ -516,11 +524,11 @@ More efficient than multiple individual `set` calls, especially for Redis and Po
 
 ```typescript
 await client.setMultiple(
-  [
-    ["user:1", { name: "Alice" }],           // uses options.ttl
-    { key: "user:2", value: { name: "Bob" }, ttl: 60 }, // overrides to 60s
-  ],
-  { ttl: 3600 }
+	[
+		["user:1", { name: "Alice" }], // uses options.ttl
+		{ key: "user:2", value: { name: "Bob" }, ttl: 60 }, // overrides to 60s
+	],
+	{ ttl: 3600 },
 );
 ```
 
@@ -538,9 +546,9 @@ More efficient than multiple individual `get` calls.
 
 **Parameters:**
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `keys` | `string[]` | Array of keys to retrieve. |
+| Parameter | Type       | Description                |
+| --------- | ---------- | -------------------------- |
+| `keys`    | `string[]` | Array of keys to retrieve. |
 
 **Returns:** `Promise<Record<string, any>>` - Object mapping keys to their values. Only **missing** or expired keys are reported as `null`; stored falsy values (`false`, `0`, `""`, `null`) are returned verbatim.
 
@@ -568,18 +576,18 @@ transaction(operations: Operation[]): Promise<any[]>
 
 Atomicity per adapter:
 
-| Adapter | Atomic | Notes |
-|---------|:-:|---|
-| Memory | ✓ | Single-threaded by nature |
-| Redis | ✓ | Uses `MULTI`/`EXEC` |
-| PostgreSQL | ✓ | Pins a single connection for `BEGIN`/…/`COMMIT`, even on a `pg.Pool` |
+| Adapter    | Atomic | Notes                                                                |
+| ---------- | :----: | -------------------------------------------------------------------- |
+| Memory     |   ✓    | Single-threaded by nature                                            |
+| Redis      |   ✓    | Uses `MULTI`/`EXEC`                                                  |
+| PostgreSQL |   ✓    | Pins a single connection for `BEGIN`/…/`COMMIT`, even on a `pg.Pool` |
 
 Per-operation `options.ttl` is honored by **all** adapters (Redis, PostgreSQL, Memory).
 
 **Parameters:**
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
+| Parameter    | Type          | Description                     |
+| ------------ | ------------- | ------------------------------- |
 | `operations` | `Operation[]` | Array of operations to execute. |
 
 **Returns:** `Promise<any[]>` - Array of results for each operation.
@@ -588,9 +596,9 @@ Per-operation `options.ttl` is honored by **all** adapters (Redis, PostgreSQL, M
 
 ```typescript
 const results = await client.transaction([
-  { type: "set", key: "counter", value: 1, options: { ttl: 60 } },
-  { type: "get", key: "counter" },
-  { type: "delete", key: "old:key" },
+	{ type: "set", key: "counter", value: 1, options: { ttl: 60 } },
+	{ type: "get", key: "counter" },
+	{ type: "delete", key: "old:key" },
 ]);
 // [true, 1, true]
 ```
@@ -605,8 +613,8 @@ Options for the `set` operation.
 
 ```typescript
 interface SetOptions {
-  /** Time-to-live in seconds. After this time, the key will expire. */
-  ttl: number;
+	/** Time-to-live in seconds. After this time, the key will expire. */
+	ttl: number;
 }
 ```
 
@@ -618,8 +626,8 @@ Information about the adapter instance.
 
 ```typescript
 interface AdapterInfo {
-  /** The adapter type identifier. */
-  type: string; // "redis" | "postgres" | "memory"
+	/** The adapter type identifier. */
+	type: string; // "redis" | "postgres" | "memory"
 }
 ```
 
@@ -631,18 +639,18 @@ Base options shared by all adapter implementations.
 
 ```typescript
 interface AdapterAbstractOptions {
-  /** Default TTL in seconds applied to all set operations when not explicitly specified. Set to 0 to disable. */
-  defaultTtl: number;
-  /** Optional logger instance for debugging and error logging. */
-  logger?: Logger;
-  /**
-   * When true (default), keys are validated on every operation:
-   * - non-empty string
-   * - no `\0` characters
-   * - total `namespace + key` length ≤ 512
-   * Set to false to opt out.
-   */
-  validateKeys?: boolean;
+	/** Default TTL in seconds applied to all set operations when not explicitly specified. Set to 0 to disable. */
+	defaultTtl: number;
+	/** Optional logger instance for debugging and error logging. */
+	logger?: Logger;
+	/**
+	 * When true (default), keys are validated on every operation:
+	 * - non-empty string
+	 * - no `\0` characters
+	 * - total `namespace + key` length ≤ 512
+	 * Set to false to opt out.
+	 */
+	validateKeys?: boolean;
 }
 ```
 
@@ -652,9 +660,9 @@ interface AdapterAbstractOptions {
 
 ```typescript
 type TtlResult =
-  | { state: "missing" }
-  | { state: "no-ttl" }
-  | { state: "expires"; at: Date };
+	| { state: "missing" }
+	| { state: "no-ttl" }
+	| { state: "expires"; at: Date };
 ```
 
 Return shape of `ttl(key)`. See the `ttl()` method above.
@@ -664,9 +672,7 @@ Return shape of `ttl(key)`. See the `ttl()` method above.
 ### `SetMultipleEntry`
 
 ```typescript
-type SetMultipleEntry =
-  | [string, any]
-  | { key: string; value: any; ttl?: number };
+type SetMultipleEntry = [string, any] | { key: string; value: any; ttl?: number };
 ```
 
 Input shape accepted by `setMultiple()`.
@@ -679,14 +685,14 @@ Represents a single operation within a transaction.
 
 ```typescript
 interface Operation {
-  /** The type of operation to perform. */
-  type: "set" | "get" | "delete";
-  /** The key to operate on. */
-  key: string;
-  /** The value to set (only used for "set" operations). */
-  value?: any;
-  /** Optional settings for the operation (only used for "set" operations). */
-  options?: Partial<SetOptions>;
+	/** The type of operation to perform. */
+	type: "set" | "get" | "delete";
+	/** The key to operate on. */
+	key: string;
+	/** The value to set (only used for "set" operations). */
+	value?: any;
+	/** Optional settings for the operation (only used for "set" operations). */
+	options?: Partial<SetOptions>;
 }
 ```
 
@@ -698,12 +704,12 @@ interface Operation {
 
 ```typescript
 interface AdapterMemoryOptions extends AdapterAbstractOptions {
-  /**
-   * Interval in seconds for automatic cleanup of expired keys.
-   * Set to 0 to disable automatic cleanup (expired keys will still be
-   * lazily removed on access).
-   */
-  ttlCleanupIntervalSec: number;
+	/**
+	 * Interval in seconds for automatic cleanup of expired keys.
+	 * Set to 0 to disable automatic cleanup (expired keys will still be
+	 * lazily removed on access).
+	 */
+	ttlCleanupIntervalSec: number;
 }
 ```
 
@@ -713,16 +719,16 @@ interface AdapterMemoryOptions extends AdapterAbstractOptions {
 
 ```typescript
 interface AdapterRedisOptions extends AdapterAbstractOptions {
-  /**
-   * Redis client instance created via `createClient()` or `createClientPool()`.
-   * Pool support is experimental and not fully tested.
-   */
-  db: ReturnType<typeof createClient> | ReturnType<typeof createClientPool>;
-  /**
-   * Set to `true` if connecting to a Redis Cluster.
-   * Note: `keys()` and `clear()` operations are not supported in cluster mode.
-   */
-  isCluster: boolean;
+	/**
+	 * Redis client instance created via `createClient()` or `createClientPool()`.
+	 * Pool support is experimental and not fully tested.
+	 */
+	db: ReturnType<typeof createClient> | ReturnType<typeof createClientPool>;
+	/**
+	 * Set to `true` if connecting to a Redis Cluster.
+	 * Note: `keys()` and `clear()` operations are not supported in cluster mode.
+	 */
+	isCluster: boolean;
 }
 ```
 
@@ -740,22 +746,22 @@ interface AdapterRedisOptions extends AdapterAbstractOptions {
 
 ```typescript
 interface AdapterPostgresOptions extends AdapterAbstractOptions {
-  /** PostgreSQL connection instance - either `pg.Pool` or `pg.Client`. */
-  db: pg.Pool | pg.Client;
-  /**
-   * Name of the table to use for storing key-value pairs.
-   * The table will be created automatically if it doesn't exist.
-   * May be prefixed with a schema, e.g. "public.kv".
-   * Must match `^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$`
-   * (word characters, optionally with one `schema.` prefix).
-   * @default "__kv"
-   */
-  tableName: string;
-  /**
-   * Interval in seconds for automatic cleanup of expired keys.
-   * Set to 0 to disable automatic cleanup.
-   */
-  ttlCleanupIntervalSec: number;
+	/** PostgreSQL connection instance - either `pg.Pool` or `pg.Client`. */
+	db: pg.Pool | pg.Client;
+	/**
+	 * Name of the table to use for storing key-value pairs.
+	 * The table will be created automatically if it doesn't exist.
+	 * May be prefixed with a schema, e.g. "public.kv".
+	 * Must match `^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$`
+	 * (word characters, optionally with one `schema.` prefix).
+	 * @default "__kv"
+	 */
+	tableName: string;
+	/**
+	 * Interval in seconds for automatic cleanup of expired keys.
+	 * Set to 0 to disable automatic cleanup.
+	 */
+	ttlCleanupIntervalSec: number;
 }
 ```
 
@@ -778,17 +784,14 @@ interface AdapterPostgresOptions extends AdapterAbstractOptions {
 Delays execution for the specified number of milliseconds.
 
 ```typescript
-function sleep(
-  timeout: number,
-  __timeout_ref__?: { id: number }
-): Promise<void>
+function sleep(timeout: number, __timeout_ref__?: { id: number }): Promise<void>;
 ```
 
 **Parameters:**
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `timeout` | `number` | - | The delay in milliseconds. |
+| Parameter         | Type             | Default      | Description                                                      |
+| ----------------- | ---------------- | ------------ | ---------------------------------------------------------------- |
+| `timeout`         | `number`         | -            | The delay in milliseconds.                                       |
 | `__timeout_ref__` | `{ id: number }` | `{ id: -1 }` | Optional reference object to capture the timeout ID for cleanup. |
 
 **Example:**
