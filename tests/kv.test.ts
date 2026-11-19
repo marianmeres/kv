@@ -728,6 +728,109 @@ testsRunner([
 		},
 	},
 	{
+		name: "postgres: keysIter pages past the page size",
+		async fn({ clients }) {
+			const client = clients.postgres;
+			const pad = (i: number) => String(i).padStart(4, "0");
+			const a = Array.from({ length: 1000 }, (_, i) => `a:${pad(i)}`);
+			const b = Array.from({ length: 3 }, (_, i) => `b:${pad(i)}`);
+			await client.setMultiple([...a, ...b].map((k) => [k, 1]));
+
+			// exactly two full pages, then an empty one
+			const seenA: string[] = [];
+			for await (const k of client.keysIter("a:*")) seenA.push(k);
+			assert.deepEqual(seenA, a);
+
+			// two full pages and a partial one
+			const seenAll: string[] = [];
+			for await (const k of client.keysIter("*")) seenAll.push(k);
+			assert.deepEqual(seenAll, [...a, ...b]);
+		},
+	},
+	{
+		name: "postgres: keysIter yields what keys() returns for keys that sort differently by locale and by byte",
+		async fn({ clients }) {
+			const client = clients.postgres;
+			const bases = [
+				"Abc",
+				"abc",
+				"a:b",
+				"a_b",
+				"a-b",
+				"a b",
+				"ab",
+				"aB",
+				"é",
+				"e",
+				"z",
+				"Z",
+				"ž",
+				"50%_x",
+				"a%b",
+				"a\\b",
+			];
+			// each base also with suffixes, so page boundaries fall among keys whose
+			// locale order and byte order disagree
+			const all = bases.flatMap((base) => [
+				base,
+				...Array.from({ length: 70 }, (_, i) => `${base}${i}`),
+			]);
+			await client.setMultiple(all.map((k) => [k, 1]));
+
+			const collected: string[] = [];
+			for await (const k of client.keysIter("*")) collected.push(k);
+
+			assert.equal(new Set(collected).size, collected.length, "no key twice");
+			assert.equal(collected.length, all.length);
+			assert.deepEqual(collected.toSorted(), await client.keys("*"));
+		},
+	},
+	{
+		name: "postgres: a write between keysIter yields returns on a pool of one",
+		raw: true,
+		async fn() {
+			const db = createPg({ max: 1 });
+			const client = createKVClient("x:", "postgres", {
+				db,
+				tableName: "_kv_keysiter_one",
+			});
+			try {
+				await client.initialize();
+				await client.clear("*");
+				const total = 1100; // three pages
+				await client.setMultiple(
+					Array.from({ length: total }, (_, i) => [
+						`k${String(i).padStart(4, "0")}`,
+						i,
+					]),
+				);
+
+				const iterator = client.keysIter("*")[Symbol.asyncIterator]();
+				const first = await iterator.next();
+				const ref = { id: -1 };
+				const outcome = await Promise.race([
+					client.delete(first.value).then(() => "deleted" as const),
+					sleep(5_000, ref).then(() => "timeout" as const),
+				]);
+				clearTimeout(ref.id);
+				await iterator.return?.(); // on the old code this is what frees the connection
+				assert.equal(outcome, "deleted");
+
+				// the rest, deleting each key between yields on the one connection
+				let walked = 0;
+				for await (const k of client.keysIter("*")) {
+					await client.delete(k);
+					walked++;
+				}
+				assert.equal(walked, total - 1);
+				assert.deepEqual(await client.keys("*"), []);
+			} finally {
+				await client.destroy(true);
+				await db.end();
+			}
+		},
+	},
+	{
 		name: "setMultiple: per-pair ttl overrides batch ttl",
 		async fn({ clients }) {
 			for (const [_type, client] of Object.entries(clients)) {

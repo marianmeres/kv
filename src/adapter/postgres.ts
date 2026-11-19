@@ -37,6 +37,9 @@ export interface AdapterPostgresOptions extends AdapterAbstractOptions {
 	ttlCleanupIntervalSec: number;
 }
 
+/** Rows fetched per page by {@link AdapterPostgres.keysIter}. */
+const KEYS_ITER_PAGE = 500;
+
 /** Minimal subset of pg.ClientBase used by this adapter. */
 type PgExecutor = {
 	query: (
@@ -439,8 +442,7 @@ export class AdapterPostgres extends AdapterAbstract {
 		const { rows } = await db.query(
 			`SELECT key FROM ${tableName}
             WHERE key LIKE $1${this.#likeEscape}
-            AND (expires_at IS NULL OR expires_at > NOW())
-            ORDER BY key`,
+            AND (expires_at IS NULL OR expires_at > NOW())`,
 			[this.#withNsLike(pattern)],
 		);
 		return rows.map((row) => this._withoutNs(row.key)).toSorted();
@@ -449,50 +451,36 @@ export class AdapterPostgres extends AdapterAbstract {
 	/** @inheritdoc */
 	override async *keysIter(pattern: string): AsyncIterable<string> {
 		this._assertInitialized();
-		const { tableName } = this.options;
+		const { db, tableName } = this.options;
+		const like = this.#withNsLike(pattern);
 
-		const { client, release } = await this.#acquireClient();
-		// Use a per-call cursor name so multiple iterators on the same PG
-		// client can't collide. `toString(36)` only emits [0-9a-z].
-		const cursorName = `kv_iter_${Math.random().toString(36).slice(2)}`;
+		// Keyset pages in byte order, which is the order of the text_pattern_ops index
+		// initialize() creates: each page is one range scan of it. Nothing stays open
+		// between yields, so an early break leaves nothing to release.
+		let after: string | undefined;
+		while (true) {
+			const { rows } =
+				after === undefined
+					? await db.query(
+							`SELECT key FROM ${tableName}
+                        WHERE key LIKE $1${this.#likeEscape}
+                        AND (expires_at IS NULL OR expires_at > NOW())
+                        ORDER BY key USING ~<~ LIMIT ${KEYS_ITER_PAGE}`,
+							[like],
+						)
+					: await db.query(
+							`SELECT key FROM ${tableName}
+                        WHERE key LIKE $1${this.#likeEscape} AND key ~>~ $2
+                        AND (expires_at IS NULL OR expires_at > NOW())
+                        ORDER BY key USING ~<~ LIMIT ${KEYS_ITER_PAGE}`,
+							[like, after],
+						);
 
-		let inTxn = false;
-		try {
-			await client.query("BEGIN");
-			inTxn = true;
-			await client.query(
-				`DECLARE ${cursorName} NO SCROLL CURSOR FOR
-                SELECT key FROM ${tableName}
-                WHERE key LIKE $1${this.#likeEscape}
-                AND (expires_at IS NULL OR expires_at > NOW())
-                ORDER BY key`,
-				[this.#withNsLike(pattern)],
-			);
-			while (true) {
-				const { rows } = await client.query(`FETCH 500 FROM ${cursorName}`);
-				if (rows.length === 0) break;
-				for (const row of rows) {
-					yield this._withoutNs(row.key);
-				}
+			for (const row of rows) {
+				yield this._withoutNs(row.key);
 			}
-		} finally {
-			if (inTxn) {
-				try {
-					await client.query(`CLOSE ${cursorName}`);
-				} catch {
-					// cursor may already be gone if the txn aborted
-				}
-				try {
-					await client.query("COMMIT");
-				} catch {
-					try {
-						await client.query("ROLLBACK");
-					} catch {
-						// ignore — caller will see the original error
-					}
-				}
-			}
-			release();
+			if (rows.length < KEYS_ITER_PAGE) return;
+			after = rows[rows.length - 1].key;
 		}
 	}
 
