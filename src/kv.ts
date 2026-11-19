@@ -26,6 +26,7 @@ export { AdapterMemory, type AdapterMemoryOptions } from "./adapter/memory.ts";
 export { AdapterPostgres, type AdapterPostgresOptions } from "./adapter/postgres.ts";
 export { AdapterRedis, type AdapterRedisOptions } from "./adapter/redis.ts";
 export { AdapterSqlite, type AdapterSqliteOptions } from "./adapter/sqlite.ts";
+export type { PostgresDb } from "./utils/driver.ts";
 export { sleep } from "./utils/sleep.ts";
 
 /**
@@ -52,7 +53,8 @@ interface KnownTypes {
  * @param type - The storage backend to use:
  *               - `"memory"` - In-memory storage (default, not persisted)
  *               - `"redis"` - Redis server (requires `db` option with Redis client)
- *               - `"postgres"` - PostgreSQL database (requires `db` option with pg client/pool)
+ *               - `"postgres"` - PostgreSQL database (requires `db` option: a `pg.Pool`, a
+ *                 connected `pg.Client`, or a sqlkit `Driver` of the `pg` dialect)
  *               - `"sqlite"` - SQLite database (requires `db` option with a `node:sqlite` `DatabaseSync`)
  * @param options - Adapter-specific configuration options.
  *

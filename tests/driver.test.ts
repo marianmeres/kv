@@ -1,0 +1,327 @@
+import assert from "node:assert/strict";
+import process from "node:process";
+import type { DatabaseSync } from "node:sqlite";
+import { SqlError } from "@marianmeres/sqlkit";
+import { createPgDriver } from "@marianmeres/sqlkit/pg";
+import { openSqlite } from "@marianmeres/sqlkit/sqlite";
+import pg from "pg";
+import type { AdapterPostgres } from "../src/adapter/postgres.ts";
+import { type AdapterAbstract, createKVClient, type Operation } from "../src/kv.ts";
+import { sleep } from "../src/utils/sleep.ts";
+import { createPg } from "./_pg.ts";
+import { testsRunner } from "./_tests-runner.ts";
+
+// The postgres adapter's `db` as a pool, a client or a sqlkit Driver. Every case is raw:
+// it builds what it needs, uses its own table, touches no Redis, and ends what it built.
+
+const TABLE = "_kv_driver_test";
+
+async function connectPgClient(): Promise<pg.Client> {
+	const client = new pg.Client({
+		host: process.env.TEST_PG_HOST || "localhost",
+		user: process.env.TEST_PG_USER,
+		database: process.env.TEST_PG_DATABASE,
+		password: process.env.TEST_PG_PASSWORD,
+		port: parseInt(process.env.TEST_PG_PORT || "5432", 10),
+	});
+	await client.connect();
+	return client;
+}
+
+/** The name of what `p` rejected with, or "no error". */
+async function errName(p: Promise<unknown>): Promise<string> {
+	try {
+		await p;
+		return "no error";
+	} catch (e) {
+		return (e as Error)?.name;
+	}
+}
+
+/** One fixed run of operations; the answers are compared across adapters. */
+async function exercise(c: AdapterAbstract): Promise<[string, unknown][]> {
+	const out: [string, unknown][] = [];
+	const push = async (label: string, p: Promise<unknown>) => {
+		out.push([label, await p]);
+	};
+	const state = async (key: string) => (await c.ttl(key)).state;
+
+	await c.clear("*");
+	await push("set a", c.set("a", { x: 1, y: [1, "two", null] }));
+	await push("get a", c.get("a"));
+	await push("exists a", c.exists("a"));
+	await push("set undefined", c.set("u", undefined));
+	await push("get u", c.get("u"));
+	await push("set null", c.set("n", null));
+	await push("exists n", c.exists("n"));
+	await push("setIfAbsent a", c.setIfAbsent("a", 2));
+	await push("setIfAbsent b", c.setIfAbsent("b", 2));
+	await push("get b", c.get("b"));
+	await push("getSet b", c.getSet("b", 3));
+	await push("getSet missing", c.getSet("gs", "x"));
+	await push("incr c", c.incr("c"));
+	await push("incr c 5", c.incr("c", 5));
+	await push("decr c 2", c.decr("c", 2));
+	await push("incr non-number", errName(c.incr("a")));
+	await push("cas missing", c.cas("x", null, "new"));
+	await push("set x", c.set("x", "a"));
+	await push("cas mismatch", c.cas("x", "z", "b"));
+	await push("cas match", c.cas("x", "a", "b"));
+	await push("get x", c.get("x"));
+	await push("set obj", c.set("obj", { n: 1 }));
+	await push("cas obj", c.cas("obj", { n: 1 }, { n: 2 }));
+	await push(
+		"setMultiple",
+		c.setMultiple([["m1", 1], { key: "m2", value: false, ttl: 60 }], { ttl: 300 }),
+	);
+	await push("getMultiple", c.getMultiple(["m1", "m2", "nope"]));
+	await push("ttl m1", state("m1"));
+	await push("ttl nope", state("nope"));
+	await push("ttl a", state("a"));
+	await push("expire a", c.expire("a", 60));
+	await push("expire nope", c.expire("nope", 60));
+	await push("ttl a after expire", state("a"));
+	await push("set e", c.set("e", 41));
+	await push("expire e -1", c.expire("e", -1));
+	await push("get expired", c.get("e"));
+	await push("exists expired", c.exists("e"));
+	await push("incr expired", c.incr("e"));
+	await push("ttl after incr", state("e"));
+	await push("set 50%_x", c.set("50%_x", 1));
+	await push("set 50abc", c.set("50abc", 1));
+	await push("keys 50%*", c.keys("50%*"));
+	await push("keys m?", c.keys("m?"));
+	await push("keys *", c.keys("*"));
+	await push(
+		"transaction",
+		c.transaction([
+			{ type: "set", key: "t1", value: { n: 1 } },
+			{ type: "get", key: "t1" },
+			{ type: "set", key: "t2", value: [1, 2], options: { ttl: 60 } },
+			{ type: "delete", key: "x" },
+			{ type: "get", key: "x" },
+			{ type: "delete", key: "x" },
+		]),
+	);
+	await push("get t1 after transaction", c.get("t1"));
+	await push("ttl t2 after transaction", state("t2"));
+	const walked: string[] = [];
+	for await (const key of c.keysIter("*")) walked.push(key);
+	out.push(["keysIter *", walked.toSorted()]); // its order is not part of the contract
+	await push("delete a", c.delete("a"));
+	await push("delete a again", c.delete("a"));
+	await push("clear m*", c.clear("m*"));
+	await push("keys * after clear", c.keys("*"));
+	await push("oversize key", errName(c.set("x".repeat(600), 1)));
+	return out;
+}
+
+/** What `exercise()` answers on the memory adapter: the reference. */
+async function reference(): Promise<[string, unknown][]> {
+	const memory = createKVClient("p:", "memory");
+	await memory.initialize();
+	try {
+		return await exercise(memory);
+	} finally {
+		await memory.destroy();
+	}
+}
+
+testsRunner([
+	{
+		name: "driver: a sqlkit Driver built by the host answers as the memory adapter does",
+		raw: true,
+		async fn() {
+			const pool = createPg();
+			const driver = createPgDriver(pool);
+			const kv = createKVClient("p:", "postgres", { db: driver, tableName: TABLE });
+			try {
+				await kv.destroy(true);
+				await kv.initialize();
+				assert.deepEqual(await exercise(kv), await reference());
+			} finally {
+				await kv.destroy(true);
+				await pool.end();
+			}
+		},
+	},
+	{
+		name: "driver: one pg.Client answers as the memory adapter does",
+		raw: true,
+		async fn() {
+			const client = await connectPgClient();
+			const kv = createKVClient("p:", "postgres", { db: client, tableName: TABLE });
+			try {
+				await kv.destroy(true);
+				await kv.initialize();
+				assert.deepEqual(await exercise(kv), await reference());
+			} finally {
+				await kv.destroy(true);
+				await client.end();
+			}
+		},
+	},
+	{
+		name: "driver: on one pg.Client a write issued during transaction() is kept",
+		raw: true,
+		async fn() {
+			const client = await connectPgClient();
+			const kv = createKVClient("x:", "postgres", { db: client, tableName: TABLE });
+			try {
+				await kv.destroy(true);
+				await kv.initialize();
+				const ops: Operation[] = Array.from({ length: 40 }, (_, i) => ({
+					type: "set",
+					key: `t${i}`,
+					value: i,
+				}));
+				ops.push({ type: "set", key: "", value: "boom" }); // rejects: all of it rolls back
+				const settled = kv.transaction(ops).then(
+					() => "resolved",
+					(e: unknown) => e,
+				);
+				await sleep(2); // the transaction is in flight now
+				assert.equal(await kv.set("outside", 1), true);
+				const outcome = await settled;
+				assert.ok(outcome instanceof TypeError, `got ${String(outcome)}`);
+				assert.equal(await kv.get("outside"), 1);
+				assert.equal(await kv.get("t0"), null);
+			} finally {
+				await kv.destroy(true);
+				await client.end();
+			}
+		},
+	},
+	{
+		name: "driver: operations join the transaction the host opened on the shared Driver",
+		raw: true,
+		async fn() {
+			const pool = createPg();
+			const driver = createPgDriver(pool);
+			const kv = createKVClient("x:", "postgres", { db: driver, tableName: TABLE });
+			try {
+				await kv.destroy(true);
+				await kv.initialize();
+
+				const boom = new Error("the host rolls back");
+				await assert.rejects(
+					driver.transaction(async () => {
+						await kv.set("joined", 1);
+						await kv.transaction([{ type: "set", key: "nested", value: 1 }]);
+						throw boom;
+					}),
+					(e) => e === boom,
+				);
+				assert.equal(await kv.get("joined"), null);
+				assert.equal(await kv.get("nested"), null);
+
+				await driver.transaction(async () => {
+					await kv.set("kept", 1);
+				});
+				assert.equal(await kv.get("kept"), 1);
+			} finally {
+				await kv.destroy(true);
+				await pool.end();
+			}
+		},
+	},
+	{
+		name: "driver: one driver per pool, however many adapters share it",
+		raw: true,
+		async fn() {
+			const pool = createPg();
+			const adapters: AdapterPostgres[] = [];
+			try {
+				assert.equal(pool.listenerCount("error"), 0);
+				for (const ns of ["a:", "b:", "c:"]) {
+					adapters.push(
+						createKVClient(ns, "postgres", { db: pool, tableName: TABLE }),
+					);
+				}
+				assert.equal(pool.listenerCount("error"), 1);
+
+				for (const kv of adapters) await kv.initialize();
+				await Promise.all(adapters.map((kv, i) => kv.set("k", i)));
+				for (const [i, kv] of adapters.entries()) {
+					assert.equal(await kv.get("k"), i);
+				}
+			} finally {
+				for (const kv of adapters) await kv.destroy(true);
+				await pool.end();
+			}
+		},
+	},
+	{
+		name: "driver: destroy() never closes what the host passed",
+		raw: true,
+		async fn() {
+			const pool = createPg();
+			const driver = createPgDriver(pool);
+			const client = await connectPgClient();
+			try {
+				for (const db of [pool, driver, client]) {
+					const kv = createKVClient("x:", "postgres", { db, tableName: TABLE });
+					await kv.initialize();
+					await kv.set("k", 1);
+					await kv.destroy();
+					await kv.destroy(true);
+				}
+				assert.equal((await pool.query("SELECT 1 AS one")).rows[0]?.one, 1);
+				assert.equal((await driver.query("select 1 as one")).rows[0]?.one, 1);
+				assert.equal((await client.query("SELECT 1 AS one")).rows[0]?.one, 1);
+			} finally {
+				await client.end();
+				await pool.end();
+			}
+		},
+	},
+	{
+		name: "driver: a driver of another dialect is refused, and the sqlite adapter refuses a Driver",
+		raw: true,
+		async fn() {
+			const lite = openSqlite();
+			try {
+				assert.throws(
+					() =>
+						createKVClient("x:", "postgres", { db: lite, tableName: TABLE }),
+					{
+						name: "TypeError",
+						message: /runs on PostgreSQL: got a "sqlite" driver/,
+					},
+				);
+				assert.throws(
+					() =>
+						createKVClient("x:", "sqlite", {
+							db: lite as unknown as DatabaseSync,
+						}),
+					{ name: "TypeError", message: /a sqlkit Driver is not supported/ },
+				);
+			} finally {
+				await lite.close();
+			}
+		},
+	},
+	{
+		name: "driver: a statement the database refused rejects with a SqlError",
+		raw: true,
+		async fn() {
+			const pool = createPg();
+			const kv = createKVClient("x:", "postgres", { db: pool, tableName: TABLE });
+			try {
+				await kv.destroy(true);
+				await kv.initialize();
+				// jsonb refuses \u0000 inside a string
+				const error = await kv.set("nul", "a\u0000b").then(
+					() => undefined,
+					(e: unknown) => e,
+				);
+				assert.ok(error instanceof SqlError, `got ${String(error)}`);
+				assert.equal(error.code, "22P05");
+				assert.ok(error.cause instanceof Error);
+			} finally {
+				await kv.destroy(true);
+				await pool.end();
+			}
+		},
+	},
+]);

@@ -5,7 +5,8 @@
  */
 
 import { createClog } from "@marianmeres/clog";
-import type pg from "pg";
+import type { Driver } from "@marianmeres/sqlkit";
+import { type PostgresDb, toPgDriver } from "../utils/driver.ts";
 import {
 	AdapterAbstract,
 	type AdapterAbstractOptions,
@@ -19,8 +20,11 @@ import {
  * Configuration options for the PostgreSQL KV adapter.
  */
 export interface AdapterPostgresOptions extends AdapterAbstractOptions {
-	/** PostgreSQL connection instance - either `pg.Pool` or `pg.Client`. */
-	db: pg.Pool | pg.Client;
+	/**
+	 * The database: a node-postgres `pg.Pool`, a connected `pg.Client`, or a sqlkit
+	 * `Driver` of the `pg` dialect. The caller owns it: the adapter never closes it.
+	 */
+	db: PostgresDb;
 	/**
 	 * Name of the table to use for storing key-value pairs.
 	 * The table will be created automatically if it doesn't exist.
@@ -39,14 +43,6 @@ export interface AdapterPostgresOptions extends AdapterAbstractOptions {
 
 /** Rows fetched per page by {@link AdapterPostgres.keysIter}. */
 const KEYS_ITER_PAGE = 500;
-
-/** Minimal subset of pg.ClientBase used by this adapter. */
-type PgExecutor = {
-	query: (
-		sql: string,
-		params?: any[],
-	) => Promise<{ rows: any[]; rowCount: number | null }>;
-};
 
 /**
  * PostgreSQL key-value storage adapter.
@@ -68,6 +64,9 @@ export class AdapterPostgres extends AdapterAbstract {
 
 	#cleanupTimer: ReturnType<typeof setTimeout> | undefined;
 
+	/** What every statement runs on: built from `options.db` by {@link toPgDriver}. */
+	readonly #db: Driver;
+
 	constructor(namespace: string = "", options: Partial<AdapterPostgresOptions> = {}) {
 		super(namespace);
 		this.options = Object.freeze({ ...this.options, ...(options || {}) });
@@ -85,6 +84,8 @@ export class AdapterPostgres extends AdapterAbstract {
 				`Invalid tableName "${this.options.tableName}". Only word characters and a single "schema." prefix are allowed.`,
 			);
 		}
+		// last, so a constructor that throws leaves no driver (and no listener) behind
+		this.#db = toPgDriver(this.options.db);
 	}
 
 	/** Safe slug derived from tableName for use inside other identifiers (e.g. index names). */
@@ -94,9 +95,9 @@ export class AdapterPostgres extends AdapterAbstract {
 
 	/** @inheritdoc */
 	override async initialize(): Promise<void> {
-		const { db, tableName } = this.options;
+		const { tableName } = this.options;
 
-		await db.query(`
+		await this.#db.query(`
             CREATE TABLE IF NOT EXISTS ${tableName} (
                 key VARCHAR(512) PRIMARY KEY,
                 value JSONB NOT NULL,
@@ -106,14 +107,14 @@ export class AdapterPostgres extends AdapterAbstract {
             )
         `);
 
-		await db.query(`
+		await this.#db.query(`
             CREATE INDEX IF NOT EXISTS idx_${this.#safeSlug}_expires_at
                 ON ${tableName} (expires_at)
                 WHERE expires_at IS NOT NULL
         `);
 
 		// Index for efficient prefix lookups with LIKE 'prefix%' queries
-		await db.query(`
+		await this.#db.query(`
             CREATE INDEX IF NOT EXISTS idx_${this.#safeSlug}_key_prefix
                 ON ${tableName} (key text_pattern_ops)
         `);
@@ -131,19 +132,19 @@ export class AdapterPostgres extends AdapterAbstract {
 		this._initialized = false;
 
 		if (hard) {
-			const { db, tableName } = this.options;
-			await db.query(`DROP TABLE IF EXISTS ${tableName}`);
+			const { tableName } = this.options;
+			await this.#db.query(`DROP TABLE IF EXISTS ${tableName}`);
 		}
 	}
 
 	async #maybeTTLCleanup() {
 		clearTimeout(this.#cleanupTimer); // safety
 		if (this.options.ttlCleanupIntervalSec) {
-			const { db, tableName, logger } = this.options;
+			const { tableName, logger } = this.options;
 
 			// do the cleanup now
 			try {
-				await db.query(`
+				await this.#db.query(`
                     DELETE FROM ${tableName}
                     WHERE expires_at IS NOT NULL AND expires_at <= NOW()`);
 			} catch (err) {
@@ -191,11 +192,11 @@ export class AdapterPostgres extends AdapterAbstract {
 		value: any,
 		options: Partial<SetOptions> = {},
 	): Promise<boolean> {
-		return this.#setOn(this.options.db, key, value, options);
+		return this.#setOn(this.#db, key, value, options);
 	}
 
 	async #setOn(
-		exec: PgExecutor,
+		exec: Driver,
 		key: string,
 		value: any,
 		options: Partial<SetOptions> = {},
@@ -228,13 +229,13 @@ export class AdapterPostgres extends AdapterAbstract {
 	): Promise<boolean> {
 		this._assertInitialized();
 		const nsKey = this._withNs(key);
-		const { db, tableName } = this.options;
+		const { tableName } = this.options;
 		const ttl = this._resolveTtl(options);
 		const expiresAt = ttl ? new Date(Date.now() + ttl * 1000) : null;
 
 		// INSERT on new keys; UPDATE only when the existing row is expired.
 		// (Live keys stay untouched — the hallmark of setIfAbsent.)
-		const { rowCount } = await db.query(
+		const { rowCount } = await this.#db.query(
 			`INSERT INTO ${tableName} (key, value, expires_at, updated_at)
             VALUES ($1, $2, $3, NOW())
             ON CONFLICT (key) DO UPDATE SET
@@ -255,12 +256,12 @@ export class AdapterPostgres extends AdapterAbstract {
 	): Promise<any> {
 		this._assertInitialized();
 		const nsKey = this._withNs(key);
-		const { db, tableName } = this.options;
+		const { tableName } = this.options;
 		const ttl = this._resolveTtl(options);
 		const expiresAt = ttl ? new Date(Date.now() + ttl * 1000) : null;
 
 		// CTE captures pre-write state; UPSERT writes; RETURNING surfaces the prev.
-		const { rows } = await db.query(
+		const { rows } = await this.#db.query(
 			`WITH prev AS (
                 SELECT value FROM ${tableName}
                 WHERE key = $1 AND (expires_at IS NULL OR expires_at > NOW())
@@ -286,7 +287,7 @@ export class AdapterPostgres extends AdapterAbstract {
 	): Promise<number> {
 		this._assertInitialized();
 		const nsKey = this._withNs(key);
-		const { db, tableName } = this.options;
+		const { tableName } = this.options;
 		const ttl = this._resolveTtl(options);
 		const expiresAt = ttl ? new Date(Date.now() + ttl * 1000) : null;
 
@@ -295,7 +296,7 @@ export class AdapterPostgres extends AdapterAbstract {
 		// The nested cast `value::text::numeric` throws 22P02 when the stored
 		// value is not a JSON number — we translate that to TypeError.
 		try {
-			const { rows } = await db.query(
+			const { rows } = await this.#db.query<{ value: unknown }>(
 				`INSERT INTO ${tableName} (key, value, expires_at, updated_at)
                 VALUES ($1, to_jsonb($2::numeric), $3, NOW())
                 ON CONFLICT (key) DO UPDATE SET
@@ -313,7 +314,7 @@ export class AdapterPostgres extends AdapterAbstract {
                 RETURNING value`,
 				[nsKey, delta, expiresAt],
 			);
-			return Number(rows[0].value);
+			return Number(rows[0]!.value);
 		} catch (err: any) {
 			if (
 				err?.code === "22P02" ||
@@ -352,7 +353,7 @@ export class AdapterPostgres extends AdapterAbstract {
 	): Promise<boolean> {
 		this._assertInitialized();
 		const nsKey = this._withNs(key);
-		const { db, tableName } = this.options;
+		const { tableName } = this.options;
 		const hasTtl = options.ttl !== undefined;
 		const ttl = hasTtl ? this._resolveTtl(options) : undefined;
 		const expiresAt = ttl ? new Date(Date.now() + ttl * 1000) : null;
@@ -375,21 +376,21 @@ export class AdapterPostgres extends AdapterAbstract {
 		const params: any[] = [nsKey, nextJson, expectedJson];
 		if (hasTtl) params.push(expiresAt);
 
-		const { rowCount } = await db.query(sql, params);
+		const { rowCount } = await this.#db.query(sql, params);
 		return (rowCount ?? 0) > 0;
 	}
 
 	/** @inheritdoc */
 	override get(key: string): Promise<any> {
-		return this.#getOn(this.options.db, key);
+		return this.#getOn(this.#db, key);
 	}
 
-	async #getOn(exec: PgExecutor, key: string): Promise<any> {
+	async #getOn(exec: Driver, key: string): Promise<any> {
 		this._assertInitialized();
 		key = this._withNs(key);
 
 		const { tableName } = this.options;
-		const { rows } = await exec.query(
+		const { rows } = await exec.query<{ value: any }>(
 			`SELECT value, expires_at
             FROM ${tableName}
             WHERE key = $1 AND (expires_at IS NULL OR expires_at > NOW())`,
@@ -398,15 +399,15 @@ export class AdapterPostgres extends AdapterAbstract {
 
 		if (rows.length === 0) return null;
 
-		return rows[0].value;
+		return rows[0]!.value;
 	}
 
 	/** @inheritdoc */
 	override delete(key: string): Promise<boolean> {
-		return this.#deleteOn(this.options.db, key);
+		return this.#deleteOn(this.#db, key);
 	}
 
-	async #deleteOn(exec: PgExecutor, key: string): Promise<boolean> {
+	async #deleteOn(exec: Driver, key: string): Promise<boolean> {
 		this._assertInitialized();
 		key = this._withNs(key);
 
@@ -423,8 +424,8 @@ export class AdapterPostgres extends AdapterAbstract {
 		this._assertInitialized();
 		key = this._withNs(key);
 
-		const { db, tableName } = this.options;
-		const { rows } = await db.query(
+		const { tableName } = this.options;
+		const { rows } = await this.#db.query(
 			`SELECT 1 FROM ${tableName}
             WHERE key = $1 AND (expires_at IS NULL OR expires_at > NOW())`,
 			[key],
@@ -437,9 +438,9 @@ export class AdapterPostgres extends AdapterAbstract {
 	override async keys(pattern: string): Promise<string[]> {
 		this._assertInitialized();
 
-		const { db, tableName } = this.options;
+		const { tableName } = this.options;
 
-		const { rows } = await db.query(
+		const { rows } = await this.#db.query<{ key: string }>(
 			`SELECT key FROM ${tableName}
             WHERE key LIKE $1${this.#likeEscape}
             AND (expires_at IS NULL OR expires_at > NOW())`,
@@ -451,7 +452,7 @@ export class AdapterPostgres extends AdapterAbstract {
 	/** @inheritdoc */
 	override async *keysIter(pattern: string): AsyncIterable<string> {
 		this._assertInitialized();
-		const { db, tableName } = this.options;
+		const { tableName } = this.options;
 		const like = this.#withNsLike(pattern);
 
 		// Keyset pages in byte order, which is the order of the text_pattern_ops index
@@ -461,14 +462,14 @@ export class AdapterPostgres extends AdapterAbstract {
 		while (true) {
 			const { rows } =
 				after === undefined
-					? await db.query(
+					? await this.#db.query<{ key: string }>(
 							`SELECT key FROM ${tableName}
                         WHERE key LIKE $1${this.#likeEscape}
                         AND (expires_at IS NULL OR expires_at > NOW())
                         ORDER BY key USING ~<~ LIMIT ${KEYS_ITER_PAGE}`,
 							[like],
 						)
-					: await db.query(
+					: await this.#db.query<{ key: string }>(
 							`SELECT key FROM ${tableName}
                         WHERE key LIKE $1${this.#likeEscape} AND key ~>~ $2
                         AND (expires_at IS NULL OR expires_at > NOW())
@@ -480,7 +481,7 @@ export class AdapterPostgres extends AdapterAbstract {
 				yield this._withoutNs(row.key);
 			}
 			if (rows.length < KEYS_ITER_PAGE) return;
-			after = rows[rows.length - 1].key;
+			after = rows[rows.length - 1]!.key;
 		}
 	}
 
@@ -488,7 +489,7 @@ export class AdapterPostgres extends AdapterAbstract {
 	override async clear(pattern: string): Promise<number> {
 		this._assertInitialized();
 
-		const { db, tableName } = this.options;
+		const { tableName } = this.options;
 		const likePattern = this.#withNsLike(pattern);
 
 		// Batch large deletions to prevent long-running transactions
@@ -497,7 +498,7 @@ export class AdapterPostgres extends AdapterAbstract {
 		let deleted: number;
 
 		do {
-			const { rowCount } = await db.query(
+			const { rowCount } = await this.#db.query(
 				`DELETE FROM ${tableName} WHERE key IN (
 					SELECT key FROM ${tableName} WHERE key LIKE $1${this.#likeEscape} LIMIT $2
 				)`,
@@ -520,7 +521,7 @@ export class AdapterPostgres extends AdapterAbstract {
 		if (entries.length === 0) return [];
 
 		const normalized = this._normalizePairs(entries);
-		const { db, tableName } = this.options;
+		const { tableName } = this.options;
 
 		const placeholders: string[] = [];
 		const params: (string | Date | null)[] = [];
@@ -540,7 +541,7 @@ export class AdapterPostgres extends AdapterAbstract {
                 expires_at = EXCLUDED.expires_at,
                 updated_at = NOW()
         `;
-		await db.query(sql, params);
+		await this.#db.query(sql, params);
 
 		return normalized.map(() => true);
 	}
@@ -553,14 +554,14 @@ export class AdapterPostgres extends AdapterAbstract {
 
 		const placeholders = keys.map((_, i) => `$${i + 1}`).join(", ");
 
-		const { db, tableName } = this.options;
+		const { tableName } = this.options;
 		const sql = `
             SELECT key, value
             FROM ${tableName}
             WHERE key IN (${placeholders}) AND (expires_at IS NULL OR expires_at > NOW())
         `;
 		const params = keys.map((k) => this._withNs(k));
-		const { rows } = await db.query(sql, params);
+		const { rows } = await this.#db.query<{ key: string; value: any }>(sql, params);
 
 		const found: Record<string, any> = Object.create(null);
 		for (const row of rows) {
@@ -581,10 +582,10 @@ export class AdapterPostgres extends AdapterAbstract {
 		this._assertInitialized();
 		key = this._withNs(key);
 
-		const { db, tableName } = this.options;
+		const { tableName } = this.options;
 		const expiresAt = new Date(Date.now() + ttl * 1000);
 
-		const { rowCount } = await db.query(
+		const { rowCount } = await this.#db.query(
 			`UPDATE ${tableName}
             SET expires_at = $2, updated_at = NOW()
             WHERE key = $1 AND (expires_at IS NULL OR expires_at > NOW())`,
@@ -599,16 +600,16 @@ export class AdapterPostgres extends AdapterAbstract {
 		this._assertInitialized();
 		key = this._withNs(key);
 
-		const { db, tableName } = this.options;
+		const { tableName } = this.options;
 
-		const { rows } = await db.query(
+		const { rows } = await this.#db.query<{ expires_at: Date | null }>(
 			`SELECT expires_at FROM ${tableName} WHERE key = $1`,
 			[key],
 		);
 
 		if (rows.length === 0) return { state: "missing" };
 
-		const expiresAt = rows[0].expires_at;
+		const expiresAt = rows[0]!.expires_at;
 		if (!expiresAt) return { state: "no-ttl" };
 
 		// expired-but-not-yet-cleaned counts as missing (matches get() filter)
@@ -617,63 +618,31 @@ export class AdapterPostgres extends AdapterAbstract {
 		return { state: "expires", at };
 	}
 
-	/**
-	 * Acquire a single pinned connection for a transaction.
-	 */
-	async #acquireClient(): Promise<{ client: PgExecutor; release: () => void }> {
-		const { db } = this.options as { db: any };
-		if (typeof db.totalCount === "number" && typeof db.connect === "function") {
-			const client = await db.connect();
-			return { client, release: () => client.release() };
-		}
-		return { client: db, release: () => {} };
-	}
-
 	/** @inheritdoc */
 	override async transaction(operations: Operation[]): Promise<any[]> {
-		this._assertInitialized();
-		const { logger } = this.options;
-
-		const { client, release } = await this.#acquireClient();
-		const results: any[] = [];
-
-		try {
-			await client.query("BEGIN");
-			try {
-				for (const op of operations) {
-					switch (op.type) {
-						case "set":
-							results.push(
-								await this.#setOn(
-									client,
-									op.key,
-									op.value,
-									op.options || {},
-								),
-							);
-							break;
-						case "get":
-							results.push(await this.#getOn(client, op.key));
-							break;
-						case "delete":
-							results.push(await this.#deleteOn(client, op.key));
-							break;
-					}
+		this._assertInitialized(); // `async` keeps this a rejection
+		// The driver pins one connection (or, on one client, holds every other caller
+		// back), checks the COMMIT, and rolls back when the callback rejects. Called from
+		// inside a transaction the host opened on the same driver, this one joins it.
+		return this.#db.transaction(async (tx) => {
+			const results: any[] = [];
+			for (const op of operations) {
+				switch (op.type) {
+					case "set":
+						results.push(
+							await this.#setOn(tx, op.key, op.value, op.options || {}),
+						);
+						break;
+					case "get":
+						results.push(await this.#getOn(tx, op.key));
+						break;
+					case "delete":
+						results.push(await this.#deleteOn(tx, op.key));
+						break;
 				}
-				await client.query("COMMIT");
-			} catch (err) {
-				try {
-					await client.query("ROLLBACK");
-				} catch (rollbackErr) {
-					logger?.error?.(`Rollback failed: ${rollbackErr}`);
-				}
-				throw err;
 			}
-		} finally {
-			release();
-		}
-
-		return results;
+			return results;
+		});
 	}
 
 	override async __debug_dump(): Promise<
@@ -681,9 +650,13 @@ export class AdapterPostgres extends AdapterAbstract {
 	> {
 		this._assertInitialized();
 
-		const { db, tableName } = this.options;
+		const { tableName } = this.options;
 
-		const { rows } = await db.query(
+		const { rows } = await this.#db.query<{
+			key: string;
+			value: unknown;
+			expires_at: Date | null;
+		}>(
 			`SELECT key, value, expires_at FROM ${tableName} WHERE key LIKE $1${this.#likeEscape}`,
 			[this.#withNsLike("*")],
 		);

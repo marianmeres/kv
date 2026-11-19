@@ -6,6 +6,7 @@
 
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { createClog } from "@marianmeres/clog";
+import { isDriver } from "../utils/driver.ts";
 import {
 	AdapterAbstract,
 	type AdapterAbstractOptions,
@@ -92,6 +93,11 @@ export class AdapterSqlite extends AdapterAbstract {
 		this.options = Object.freeze({ ...this.options, ...(options || {}) });
 		if (!this.options.db) {
 			throw new Error("Missing sqlite database instance");
+		}
+		if (isDriver(this.options.db)) {
+			throw new TypeError(
+				"The sqlite adapter takes a node:sqlite DatabaseSync; a sqlkit Driver is not supported yet",
+			);
 		}
 		// tableName is spliced into SQL verbatim, so guard against surprises.
 		if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(this.options.tableName)) {

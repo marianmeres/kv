@@ -49,8 +49,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
     "format": "biome check --write .",
-    "test": "node --test --env-file-if-exists=.env \"tests/**/*.test.ts\"",
-    "test:watch": "node --test --watch --env-file-if-exists=.env \"tests/**/*.test.ts\"",
+    "test": "node --test --test-concurrency=1 --env-file-if-exists=.env \"tests/**/*.test.ts\"",
+    "test:watch": "node --test --test-concurrency=1 --watch --env-file-if-exists=.env \"tests/**/*.test.ts\"",
     "ci": "pnpm run typecheck && pnpm run lint && pnpm test",
     "prepublishOnly": "pnpm run ci && pnpm run build",
     "release": "npx --yes @marianmeres/release@^2.2.0",
@@ -59,13 +59,14 @@
   },
   "dependencies": {
     "@marianmeres/clog": "^3.23.0",
-    "@types/pg": "^8.23.1",
-    "pg": "^8.23.1",
+    "@marianmeres/sqlkit": "^0.1.1",
     "redis": "^6.3.1"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.4",
     "@types/node": "^26.6.6",
+    "@types/pg": "^8.23.1",
+    "pg": "^8.23.1",
     "typescript": "^7.0.2"
   }
 }
