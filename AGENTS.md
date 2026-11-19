@@ -39,6 +39,9 @@ tests/
 ├── _sqlite.ts          — SQLite test helper (fresh `:memory:` database per test)
 └── _no-destroy-child.ts — child process: an adapter left running must not hold it open
 
+docs/
+└── backlog.md          — Open work, ranked, not scheduled (the open copy)
+
 dist/                   — `tsc -p tsconfig.build.json` output; gitignored; the npm payload
 ```
 
@@ -93,7 +96,8 @@ dist/                   — `tsc -p tsconfig.build.json` output; gitignored; the
 ## Before Making Changes
 
 - [ ] Check existing patterns in adapter implementations
-- [ ] Add or extend a test in `tests/kv.test.ts`, then run `pnpm run ci`
+- [ ] Add or extend a test in `tests/kv.test.ts` (or in `tests/driver.test.ts` for what only
+  the postgres adapter's `db` decides), then run `pnpm run ci`
 - [ ] Verify adapter limitations are documented (README feature matrix, API.md)
 
 ## Supported Adapters
@@ -170,6 +174,9 @@ interface Operation {
 
 type SetMultipleEntry = [string, any] | { key: string; value: any; ttl?: number };
 
+// the postgres adapter's `db`; sqlkit's structural types, so `src/` never imports `pg`
+type PostgresDb = PgPoolLike | PgStandaloneClientLike | Driver;
+
 type TtlResult =
 	| { state: "missing" }
 	| { state: "no-ttl" }
@@ -224,3 +231,4 @@ To add a new adapter:
 
 - [API Reference](./API.md) — Complete API documentation
 - [README](./README.md) — Quick start, feature matrix, breaking changes, development
+- [Backlog](./docs/backlog.md) — Open work after 4.0.0, with each row's trigger

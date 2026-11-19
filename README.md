@@ -19,8 +19,11 @@ npm install @marianmeres/kv    # or pnpm add
 
 Versions up to 3.1.1 are also on JSR. From 4.0 the package is published to npm only.
 
-The `redis`, `postgres` and `sqlite` adapters take a client you create yourself (`redis`,
-`pg`, or a `node:sqlite` `DatabaseSync`, which ships with Node). Requires Node >= 24.12.
+The `redis`, `postgres` and `sqlite` adapters take a client you create yourself: a
+`redis` client; a `pg.Pool`, a `pg.Client` or a
+[`@marianmeres/sqlkit`](https://www.npmjs.com/package/@marianmeres/sqlkit) `Driver`; or a
+`node:sqlite` `DatabaseSync`, which ships with Node. kv does not install `pg`: an app that
+uses the postgres adapter has it already. Requires Node >= 24.12.
 
 ## Usage
 
@@ -98,20 +101,20 @@ type TtlResult =
 
 ## Adapter Feature Matrix
 
-| Feature                                                   |       Memory        |         Redis          |    PostgreSQL    |          SQLite           |
-| --------------------------------------------------------- | :-----------------: | :--------------------: | :--------------: | :-----------------------: |
-| Persistent                                                |          ✗          |           ✓            |        ✓         |     ✓ (file database)     |
-| TTL on `set()`                                            |          ✓          |           ✓            |        ✓         |             ✓             |
-| `ttl()` → `expires`/`no-ttl`/`missing`                    |          ✓          |           ✓            |        ✓         |             ✓             |
-| `expire()`                                                |          ✓          |           ✓            |        ✓         |             ✓             |
-| Atomic `setIfAbsent` / `incr` / `decr` / `cas` / `getSet` |          ✓          |        ✓ (Lua)         |    ✓ (UPSERT)    | ✓ (UPSERT / IMMEDIATE tx) |
-| Sorted `keys()`                                           |          ✓          |           ✓            |        ✓         |             ✓             |
-| Streaming `keysIter()`                                    |          ✓          |        ✓ (SCAN)        |    ✓ (cursor)    |     ✓ (keyset paging)     |
-| Per-pair TTL in `setMultiple`                             |          ✓          |           ✓            |        ✓         |             ✓             |
-| Atomic `transaction()`                                    | ✓ (single-threaded) |       ✓ (MULTI)        | ✓ (BEGIN/COMMIT) |    ✓ (BEGIN IMMEDIATE)    |
-| `delete()` returns real existed-flag                      |          ✓          |           ✓            |        ✓         |             ✓             |
-| Background TTL cleanup                                    |      optional       | native (Redis does it) |     optional     |         optional          |
-| `keys()` / `clear()`                                      |          ✓          |  ✓ (non-cluster only)  |        ✓         |             ✓             |
+| Feature                                                   |       Memory        |         Redis          |    PostgreSQL     |          SQLite           |
+| --------------------------------------------------------- | :-----------------: | :--------------------: | :---------------: | :-----------------------: |
+| Persistent                                                |          ✗          |           ✓            |         ✓         |     ✓ (file database)     |
+| TTL on `set()`                                            |          ✓          |           ✓            |         ✓         |             ✓             |
+| `ttl()` → `expires`/`no-ttl`/`missing`                    |          ✓          |           ✓            |         ✓         |             ✓             |
+| `expire()`                                                |          ✓          |           ✓            |         ✓         |             ✓             |
+| Atomic `setIfAbsent` / `incr` / `decr` / `cas` / `getSet` |          ✓          |        ✓ (Lua)         |    ✓ (UPSERT)     | ✓ (UPSERT / IMMEDIATE tx) |
+| Sorted `keys()`                                           |          ✓          |           ✓            |         ✓         |             ✓             |
+| Streaming `keysIter()`                                    |          ✓          |        ✓ (SCAN)        | ✓ (keyset paging) |     ✓ (keyset paging)     |
+| Per-pair TTL in `setMultiple`                             |          ✓          |           ✓            |         ✓         |             ✓             |
+| Atomic `transaction()`                                    | ✓ (single-threaded) |       ✓ (MULTI)        | ✓ (BEGIN/COMMIT)  |    ✓ (BEGIN IMMEDIATE)    |
+| `delete()` returns real existed-flag                      |          ✓          |           ✓            |         ✓         |             ✓             |
+| Background TTL cleanup                                    |      optional       | native (Redis does it) |     optional      |         optional          |
+| `keys()` / `clear()`                                      |          ✓          |  ✓ (non-cluster only)  |         ✓         |             ✓             |
 
 ## Adapter-Specific Limitations
 
@@ -123,9 +126,31 @@ type TtlResult =
 
 ### PostgreSQL
 
+`db` takes a `pg.Pool`, a connected `pg.Client`, or a `Driver` from
+[`@marianmeres/sqlkit`](https://www.npmjs.com/package/@marianmeres/sqlkit) of the `pg`
+dialect. An app that already builds one driver for everything that talks SQL passes it
+here too:
+
+```typescript
+import { createPgDriver } from "@marianmeres/sqlkit/pg";
+import pg from "pg";
+
+const db = createPgDriver(new pg.Pool({ connectionString: process.env.DATABASE_URL }));
+const client = createKVClient("my-app-namespace:", "postgres", { db });
+```
+
+- **The adapter never closes what it was given.** `destroy()` leaves the pool, the client
+  or the driver open; ending it is yours. Several adapters can share one.
+- **`transaction()` runs on one connection.** On a `pg.Pool` it pins one for the whole
+  unit. On one `pg.Client` the calls take turns: another call waits for the transaction
+  to finish.
+- **A call made inside a transaction you opened on the same `Driver` joins it**, and
+  commits or rolls back with it.
+- **A statement the database refused rejects with sqlkit's `SqlError`**: it carries
+  Postgres's `code` and message, with node-postgres's error as `cause`. kv's own
+  `TypeError` and `RangeError` are unchanged.
 - Creates a table (default: `__kv`) in your database.
 - `tableName` must match `^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$` (word chars plus an optional `schema.` prefix).
-- `transaction()` pins a single connection from the Pool for the whole BEGIN/…/COMMIT block — safe to call against a `pg.Pool`.
 - Supports optional TTL cleanup via `ttlCleanupIntervalSec` option.
 
 ### SQLite
@@ -157,6 +182,69 @@ const client = createKVClient("my-app-namespace:", "sqlite", {
 
 - Data is not persisted (in-memory only).
 - Supports optional TTL cleanup via `ttlCleanupIntervalSec` option.
+
+## Breaking Changes (4.0.0)
+
+No signature changed, and a `pg.Pool` or `pg.Client` you pass today still works. What
+changed is what gets installed and how the PostgreSQL adapter behaves at its edges. The
+memory and Redis adapters do not change: if they are all you use, the bump needs nothing
+from you. Each note says first what you have to do, if anything.
+
+**What to install**
+
+- **`pg` and `@types/pg` are no longer installed with kv; `@marianmeres/sqlkit` is.** If
+  you relied on kv to bring `pg` in, add it to your own `dependencies`. The postgres
+  adapter never loaded `pg` itself: it takes the pool or client you built, so an app that
+  uses it depends on `pg` already.
+
+**What the postgres adapter's `db` takes**
+
+- **`db` also takes a sqlkit `Driver` of the `pg` dialect.** Nothing to do; pass one if you
+  want your app and kv on one driver. The option's type, `PostgresDb`, is declared by
+  shape, and a `pg.Pool` and a `pg.Client` fit it as they are. A driver of another
+  dialect is refused at construction, with a `TypeError`.
+- **A `db` that is neither a pool, a client nor a driver is refused at construction, with
+  a `TypeError`.** Nothing to do: such a `db` never worked. It used to fail at
+  `initialize()`.
+- **The sqlite adapter refuses a sqlkit `Driver` at construction, with a `TypeError`.**
+  Pass a `node:sqlite` `DatabaseSync`, as before. A driver never worked there: it used to
+  fail at the first operation. Nothing else about the sqlite adapter changes.
+
+**Errors**
+
+- **A statement Postgres refused rejects with sqlkit's `SqlError`.** If your code tests
+  `instanceof` against node-postgres's error class, test for `SqlError` (exported by
+  `@marianmeres/sqlkit`) instead. `code` and the message are Postgres's, as before, and
+  node-postgres's error is the `cause`. kv's own `TypeError` and `RangeError` are
+  unchanged.
+- **The adapter listens for the pool's or client's `error` event.** Nothing to do. An
+  idle connection the server dropped is reported through `process.emitWarning` when you
+  have no listener of your own. It used to end the process.
+
+**One connection, and transactions**
+
+- **On one `pg.Client`, calls take turns.** Nothing to do. A call issued while
+  `transaction()` runs waits for it to finish. It used to run inside that transaction and
+  could be rolled back with it.
+- **A call issued inside a transaction you opened on the same `Driver` joins that
+  transaction.** Nothing to do, unless kv's writes must outlive your rollback: then make
+  them outside your transaction. Joining is what sharing a driver means.
+- **`transaction()` checks its `COMMIT`.** Nothing to do. A `COMMIT` that did not commit
+  rejects, and a connection whose `ROLLBACK` failed is destroyed, not returned to the
+  pool.
+
+**`keysIter()`**
+
+- **On PostgreSQL, `keysIter()` pages by key, 500 at a time, in place of a server-side
+  cursor.** If you need a list consistent to one moment, use `keys()`. No connection is
+  held between yields, so a write made between two of them no longer waits for the walk
+  to end. The walk is no longer one snapshot: a key added or removed during it may or may
+  not be seen, as on Redis and SQLite.
+
+**JSR**
+
+- **The package is no longer published to JSR.** Install from npm. 3.1.1 is the last
+  version on JSR and stays there.
 
 ## Breaking Changes (3.0.0)
 

@@ -43,6 +43,7 @@ function createKVClient<T extends keyof KnownTypes>(
 - `TypeError` - If namespace doesn't end with `:` (and is not empty)
 - `TypeError` - If an unsupported adapter type is specified
 - `Error` - If required options (like `db`) are missing for the adapter
+- `TypeError` - If `db` is not of a kind the adapter takes (see its options below)
 
 **Example:**
 
@@ -64,6 +65,9 @@ import pg from "pg";
 const pool = new pg.Pool({ connectionString: "..." });
 const postgres = createKVClient("myapp:", "postgres", { db: pool });
 await postgres.initialize();
+// ...or on the sqlkit Driver your app already shares
+import { createPgDriver } from "@marianmeres/sqlkit/pg";
+const shared = createKVClient("myapp:", "postgres", { db: createPgDriver(pool) });
 
 // SQLite storage (node:sqlite ships with Node)
 import { DatabaseSync } from "node:sqlite";
@@ -456,11 +460,12 @@ Iterates matching keys without materializing the full list. Prefer this over `ke
 keysIter(pattern: string): AsyncIterable<string>
 ```
 
-Ordering is not guaranteed across adapters — use `keys()` if you need sorted output.
+Ordering is not guaranteed across adapters — use `keys()` if you need sorted output. The
+walk is not one snapshot: a key added or removed while it runs may or may not be seen.
 
 **Per-adapter behavior:**
 - Redis: wraps `SCAN` (non-blocking).
-- PostgreSQL: uses a server-side cursor (`DECLARE CURSOR`) inside a short transaction. Early break releases the cursor and commits.
+- PostgreSQL: keyset pages of 500 keys, in byte order on the prefix index `initialize()` creates. Nothing stays open between pages, so an early break has nothing to release and a write between two yields does not wait for the walk.
 - SQLite: keyset pages of 500 keys (`key > last ORDER BY key`). Nothing stays open between pages, so an early break has nothing to release.
 - Memory: yields from the internal `Map`.
 
@@ -468,7 +473,7 @@ Ordering is not guaranteed across adapters — use `keys()` if you need sorted o
 
 ```typescript
 for await (const k of client.keysIter("user:*")) {
-	if (someCondition(k)) break; // safe — cursor is released
+	if (someCondition(k)) break; // safe — nothing is left open
 }
 ```
 
@@ -585,12 +590,12 @@ transaction(operations: Operation[]): Promise<any[]>
 
 Atomicity per adapter:
 
-| Adapter    | Atomic | Notes                                                                |
-| ---------- | :----: | -------------------------------------------------------------------- |
-| Memory     |   ✓    | Single-threaded by nature                                            |
-| Redis      |   ✓    | Uses `MULTI`/`EXEC`                                                  |
-| PostgreSQL |   ✓    | Pins a single connection for `BEGIN`/…/`COMMIT`, even on a `pg.Pool` |
-| SQLite     |   ✓    | `BEGIN IMMEDIATE`; a savepoint inside a caller-opened transaction    |
+| Adapter    | Atomic | Notes                                                                                |
+| ---------- | :----: | ------------------------------------------------------------------------------------ |
+| Memory     |   ✓    | Single-threaded by nature                                                            |
+| Redis      |   ✓    | Uses `MULTI`/`EXEC`                                                                  |
+| PostgreSQL |   ✓    | One connection for the whole unit: pinned on a `pg.Pool`, in turn on one `pg.Client` |
+| SQLite     |   ✓    | `BEGIN IMMEDIATE`; a savepoint inside a caller-opened transaction                    |
 
 Per-operation `options.ttl` is honored by **all** adapters (Redis, PostgreSQL, SQLite, Memory).
 
@@ -708,6 +713,27 @@ interface Operation {
 
 ---
 
+### `PostgresDb`
+
+What the postgres adapter's `db` option takes.
+
+```typescript
+import type { Driver } from "@marianmeres/sqlkit";
+import type { PgPoolLike, PgStandaloneClientLike } from "@marianmeres/sqlkit/pg";
+
+type PostgresDb = PgPoolLike | PgStandaloneClientLike | Driver;
+```
+
+- `PgPoolLike` — a node-postgres `pg.Pool`.
+- `PgStandaloneClientLike` — a connected node-postgres `pg.Client`.
+- `Driver` — a sqlkit driver of the `pg` dialect, e.g. `createPgDriver(pool)` from
+  `@marianmeres/sqlkit/pg`.
+
+The first two are declared by shape, so kv imports nothing from `pg`, and a `pg.Pool` and
+a `pg.Client` fit them as they are. See [`AdapterPostgresOptions`](#adapterpostgresoptions).
+
+---
+
 ## Adapter-Specific Options
 
 ### `AdapterMemoryOptions`
@@ -757,8 +783,11 @@ interface AdapterRedisOptions extends AdapterAbstractOptions {
 
 ```typescript
 interface AdapterPostgresOptions extends AdapterAbstractOptions {
-	/** PostgreSQL connection instance - either `pg.Pool` or `pg.Client`. */
-	db: pg.Pool | pg.Client;
+	/**
+	 * The database: a node-postgres `pg.Pool`, a connected `pg.Client`, or a sqlkit
+	 * `Driver` of the `pg` dialect. The caller owns it: the adapter never closes it.
+	 */
+	db: PostgresDb;
 	/**
 	 * Name of the table to use for storing key-value pairs.
 	 * The table will be created automatically if it doesn't exist.
@@ -777,8 +806,45 @@ interface AdapterPostgresOptions extends AdapterAbstractOptions {
 }
 ```
 
-**Transactions on a Pool:**
-`transaction()` checks out a single client from the pool (via `pool.connect()`) for the entire `BEGIN`/`COMMIT`/`ROLLBACK` block, so atomicity holds even when multiple transactions run concurrently against the same `pg.Pool`. On a `pg.Client`, no checkout happens.
+`db` is a [`PostgresDb`](#postgresdb): pass a `pg.Pool` or a connected `pg.Client` as it
+is, or a [`@marianmeres/sqlkit`](https://www.npmjs.com/package/@marianmeres/sqlkit)
+`Driver` your app built. The constructor refuses, with a `TypeError`, a `Driver` of
+another dialect and anything that is neither a pool, a client nor a driver.
+
+**Connection ownership:** the adapter never closes what it was given — not the pool, not
+the client, not the driver — so `destroy()` leaves it open and several adapters can share
+one.
+
+**Transactions and connections:** every statement runs on a sqlkit `Driver`. The adapter
+builds one over a `pg.Pool` or a `pg.Client`, one per pool or client object however many
+adapters share it, and uses a `Driver` you pass as it is. `transaction()` runs on one
+connection for the whole unit, and a `COMMIT` that did not commit rejects:
+
+- **On a `pg.Pool`**, it pins one connection for its length; other calls run on other
+  connections at once. A connection whose `ROLLBACK` failed is destroyed, not returned to
+  the pool.
+- **On one `pg.Client`**, calls take turns: one issued while a transaction runs waits for
+  it to finish, and never becomes part of it.
+- **On a `Driver` you pass**, the same holds for the pool or client under it. In addition,
+  a kv call issued inside a transaction you opened on that same driver
+  (`driver.transaction(async () => { await kv.set(…) })`) joins your transaction and
+  commits or rolls back with it. Make the call outside your transaction if it must
+  outlive your rollback.
+
+The adapter listens for the pool's or client's `error` event, so an idle connection the
+server dropped does not end the process: it is reported through `process.emitWarning`
+when you have no listener of your own.
+
+A `Driver` over PGlite (`createPgliteDriver` from `@marianmeres/sqlkit/pglite`) is of the
+`pg` dialect and is expected to work; it is not part of the test suite yet.
+
+**Errors:** a statement the database refused rejects with sqlkit's `SqlError` (exported
+by `@marianmeres/sqlkit`), unwrapped and untranslated. Its `code` is Postgres's SQLSTATE
+(e.g. `22P05`), its message is Postgres's, and its `cause` is the driver library's own
+error (node-postgres's, on a pool or a client). The one database error the adapter reads
+is a non-numeric `incr`/`decr` target (`22P02`), which it turns into
+`TypeError("KV value is not a number")`, as every adapter does. kv's own `TypeError` and
+`RangeError`, for an invalid key or namespace, are unchanged.
 
 **Table Schema:**
 - `key` (VARCHAR 512) - Primary key
@@ -813,6 +879,9 @@ interface AdapterSqliteOptions extends AdapterAbstractOptions {
 	ttlCleanupIntervalSec: number;
 }
 ```
+
+A sqlkit `Driver` (e.g. from `openSqlite()`) is refused at construction with a
+`TypeError`: the adapter takes the `DatabaseSync` itself.
 
 **Connection ownership:** the adapter never opens, closes or reconfigures the handle — it
 sets no pragmas. Call `destroy()` before you close the handle: if the TTL cleanup finds it
