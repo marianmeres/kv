@@ -7,10 +7,7 @@ Machine-friendly reference for AI agents working with this codebase.
 - **Stack**: TypeScript (erasable-only), Node LTS (`.node-version`), pnpm, `node:test`, Biome.
 - **Install**: `pnpm install` | **Test**: `pnpm test` (needs Postgres + Redis; SQLite runs in memory) |
   **Check all**: `pnpm run ci` | **Build**: `pnpm run build`
-- **Published**: npm (`dist/`, built by `tsc`) and JSR (`src/` via `jsr.json`, for Deno consumers)
-- **JSR imports**: `jsr.json` maps `@marianmeres/clog` to `jsr:` so Deno apps get one copy;
-  keep its range equal to `package.json`'s. `pg` and `redis` resolve from `package.json` as
-  `npm:`. Only `deno publish` reads `jsr.json`: `test:deno` still runs against npm clog.
+- **Published**: npm (`dist/`, built by `tsc`)
 
 ## Purpose
 
@@ -20,7 +17,7 @@ Key-value storage abstraction layer providing a unified Redis-inspired API acros
 
 ```
 src/
-├── index.ts            — The only entry point (package.json "exports", jsr.json "exports")
+├── index.ts            — The only entry point (package.json "exports")
 ├── kv.ts               — Factory function and all exports
 ├── adapter/
 │   ├── abstract.ts     — Base class + shared types
@@ -46,8 +43,8 @@ dist/                   — `tsc -p tsconfig.build.json` output; gitignored; the
 
 1. **Runtime policy** — Node at the keyboard and in production, npm as the registry. No
    `Deno.*`, `Bun.*`, `bun:*`, `jsr:` or `npm:` specifiers. Web standards first; `node:*`
-   where they don't reach. Nothing is built, tested or documented for Bun or Deno; JSR is
-   published only while Deno consumers exist (`publish:jsr` runs `test:deno` first).
+   where they don't reach. Nothing is built, tested or documented for Bun or Deno.
+   Published to npm only; 3.1.1 was the last version on JSR.
 2. **Erasable TypeScript** — no `enum`, `namespace`, constructor parameter properties;
    `import type` for types; explicit `.ts` import extensions (rewritten to `.js` on emit).
    Node strips types and never checks them: `pnpm run typecheck` is the only type gate.
@@ -171,11 +168,10 @@ pnpm run typecheck     # tsc --noEmit
 pnpm run lint          # biome check . (read-only); `pnpm run format` writes
 pnpm run ci            # typecheck + lint + test — what CI runs
 pnpm run build         # tsc -p tsconfig.build.json → dist/
-pnpm run test:deno     # the same suite on Deno; only gates publish:jsr
 ```
 
-Releasing (`pnpm run rp` / `rpm`, or `pnpm run release major` + `pnpm run publish:all`) is a
-human action.
+Releasing (`pnpm run rp` / `rpm`, or `pnpm run release major` + `pnpm publish`) is a human
+action.
 
 ## Test Environment Variables
 

@@ -1,7 +1,6 @@
 # @marianmeres/kv
 
 [![NPM version](https://img.shields.io/npm/v/@marianmeres/kv.svg)](https://www.npmjs.com/package/@marianmeres/kv)
-[![JSR version](https://jsr.io/badges/@marianmeres/kv)](https://jsr.io/@marianmeres/kv)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 Key-value storage abstraction layer with support for multiple backend adapters:
@@ -16,8 +15,9 @@ The API is inspired by the Redis API.
 
 ```sh
 npm install @marianmeres/kv    # or pnpm add
-deno add jsr:@marianmeres/kv   # Deno
 ```
+
+Versions up to 3.1.1 are also on JSR. From 4.0 the package is published to npm only.
 
 The `redis`, `postgres` and `sqlite` adapters take a client you create yourself (`redis`,
 `pg`, or a `node:sqlite` `DatabaseSync`, which ships with Node). Requires Node >= 24.12.
@@ -245,15 +245,15 @@ Redis (SQLite runs in memory, nothing to set up). Copy `.env.example` to `.env` 
 in the connection details. Redis keys in the target database are deleted before each
 test, so point it at a scratch database (the default is `/13`).
 
-| Command                             | Does                                               |
-| ----------------------------------- | -------------------------------------------------- |
-| `pnpm install`                      | installs dependencies and dev tooling              |
-| `pnpm test` / `pnpm run test:watch` | `node --test` over `tests/**/*.test.ts`            |
-| `pnpm run typecheck`                | `tsc --noEmit` over `src` and `tests`              |
-| `pnpm run lint` / `pnpm run format` | `biome check .` read-only / with `--write`         |
-| `pnpm run ci`                       | typecheck + lint + test, what CI runs              |
-| `pnpm run build`                    | `tsc -p tsconfig.build.json` → `dist/`             |
-| `pnpm run rp` / `pnpm run rpm`      | patch / minor release, then publish to npm and JSR |
+| Command                             | Does                                       |
+| ----------------------------------- | ------------------------------------------ |
+| `pnpm install`                      | installs dependencies and dev tooling      |
+| `pnpm test` / `pnpm run test:watch` | `node --test` over `tests/**/*.test.ts`    |
+| `pnpm run typecheck`                | `tsc --noEmit` over `src` and `tests`      |
+| `pnpm run lint` / `pnpm run format` | `biome check .` read-only / with `--write` |
+| `pnpm run ci`                       | typecheck + lint + test, what CI runs      |
+| `pnpm run build`                    | `tsc -p tsconfig.build.json` → `dist/`     |
+| `pnpm run rp` / `pnpm run rpm`      | patch / minor release, then publish to npm |
 
 ## License
 

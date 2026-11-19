@@ -1094,14 +1094,10 @@ testsRunner([
 		name: "cleanup timer does not hold the process open (no destroy())",
 		raw: true,
 		async fn() {
-			// Under `pnpm run test:deno` (the gate before a JSR publish) the child runs on
-			// Deno too, which needs `run -A`; Node runs the .ts directly.
 			const childPath = join("tests", "_no-destroy-child.ts");
 			try {
 				for (const type of ["memory", "sqlite", "postgres"]) {
-					const args =
-						"Deno" in globalThis ? ["run", "-A", childPath] : [childPath];
-					const child = spawn(process.execPath, [...args, type], {
+					const child = spawn(process.execPath, [childPath, type], {
 						cwd: join(import.meta.dirname, ".."),
 						stdio: ["ignore", "pipe", "pipe"],
 					});
