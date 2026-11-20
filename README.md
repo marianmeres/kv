@@ -4,6 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 Key-value storage abstraction layer with support for multiple backend adapters:
+
 - redis
 - postgresql
 - sqlite (`node:sqlite`)
@@ -262,6 +263,7 @@ from you. Each note says first what you have to do, if anything.
 Shipped as a minor release, although the first two items are breaking:
 
 **Breaking:**
+
 - **`ttl(key)` now returns a discriminated `TtlResult`** — `{ state: "missing" | "no-ttl" | "expires", at? }` — instead of `Date | null | false`. Migration:
 
   ```ts
@@ -282,6 +284,7 @@ Shipped as a minor release, although the first two items are breaking:
 - **Key validation is on by default.** Non-empty strings, no `\0`, total `namespace + key` length ≤ 512. Set `validateKeys: false` on the adapter options to opt out. Previous behavior silently accepted empty/overlong keys and let the backend error cryptically.
 
 **Additive:**
+
 - New methods `setIfAbsent`, `incr`, `decr`, `getSet`, `cas`, `keysIter` on every adapter.
 - `setMultiple` accepts `{ key, value, ttl? }[]` entries in addition to the legacy `[key, value][]` tuples. Per-pair `ttl` overrides batch `options.ttl`.
 - Deno KV: new `strictDeleteResult: true` option pre-checks existence so `delete()` returns the real did-it-exist flag (default stays `true` for BC).

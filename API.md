@@ -27,6 +27,7 @@ function createKVClient<T extends keyof KnownTypes>(
 ```
 
 **Type Parameters:**
+
 - `T` - The adapter type (inferred from the `type` parameter)
 
 **Parameters:**
@@ -40,6 +41,7 @@ function createKVClient<T extends keyof KnownTypes>(
 **Returns:** A configured adapter instance. Call `initialize()` before use.
 
 **Throws:**
+
 - `TypeError` - If namespace doesn't end with `:` (and is not empty)
 - `TypeError` - If an unsupported adapter type is specified
 - `Error` - If required options (like `db`) are missing for the adapter
@@ -376,6 +378,7 @@ type TtlResult =
 | `key`     | `string` | The key to check. |
 
 **Returns:** A `TtlResult`. Switch on `.state`:
+
 - `"missing"` — key doesn't exist (or has expired)
 - `"no-ttl"` — key exists with no expiration
 - `"expires"` — key exists and will expire at `.at`
@@ -426,6 +429,7 @@ keys(pattern: string): Promise<string[]>
 ```
 
 Uses Redis-style wildcard patterns:
+
 - `*` matches any number of characters
 - `?` matches exactly one character
 - **Every other character is a literal match**, including regex metacharacters (`.`, `(`, `[`, `+`, `^`, `$`, `|`) and SQL LIKE metacharacters (`%`, `_`, `\`).
@@ -464,6 +468,7 @@ Ordering is not guaranteed across adapters — use `keys()` if you need sorted o
 walk is not one snapshot: a key added or removed while it runs may or may not be seen.
 
 **Per-adapter behavior:**
+
 - Redis: wraps `SCAN` (non-blocking).
 - PostgreSQL: keyset pages of 500 keys, in byte order on the prefix index `initialize()` creates. Nothing stays open between pages, so an early break has nothing to release and a write between two yields does not wait for the walk.
 - SQLite: keyset pages of 500 keys (`key > last ORDER BY key`). Nothing stays open between pages, so an early break has nothing to release.
@@ -847,6 +852,7 @@ is a non-numeric `incr`/`decr` target (`22P02`), which it turns into
 `RangeError`, for an invalid key or namespace, are unchanged.
 
 **Table Schema:**
+
 - `key` (VARCHAR 512) - Primary key
 - `value` (JSONB) - Stored value
 - `expires_at` (TIMESTAMP WITH TIME ZONE) - Expiration time
@@ -904,6 +910,7 @@ index for a literal prefix. `[` is escaped, so `keys()` / `clear()` follow the s
 literal-except-`*`/`?` rules as every adapter.
 
 **Table Schema:**
+
 - `key` (TEXT) - Primary key
 - `value` (TEXT) - Stored value as JSON text
 - `expires_at` (INTEGER) - Expiration time as epoch milliseconds; `NULL` = no expiration

@@ -97,7 +97,7 @@ dist/                   — `tsc -p tsconfig.build.json` output; gitignored; the
 
 - [ ] Check existing patterns in adapter implementations
 - [ ] Add or extend a test in `tests/kv.test.ts` (or in `tests/driver.test.ts` for what only
-  the postgres adapter's `db` decides), then run `pnpm run ci`
+      the postgres adapter's `db` decides), then run `pnpm run ci`
 - [ ] Verify adapter limitations are documented (README feature matrix, API.md)
 
 ## Supported Adapters
@@ -219,6 +219,7 @@ TEST_REDIS_URL=redis://localhost:6379/13
 ## Extending
 
 To add a new adapter:
+
 1. Create `src/adapter/<name>.ts`
 2. Extend `AdapterAbstract`; call `super(namespace)` and re-merge `options` (convention 5)
 3. Implement all abstract/interface methods
