@@ -889,7 +889,7 @@ adapter reads is `22P02` from that statement, a backstop it answers with the sam
 unchanged.
 
 `instanceof SqlError` holds when your app's own `@marianmeres/sqlkit` is 0.3.0 or newer
-(kv installs `^0.3.1`). From 0.3.0 a `SqlError` is recognized across copies of the
+(kv installs `^0.3.2`). From 0.3.0 a `SqlError` is recognized across copies of the
 package, so yours need not be the copy kv loads. A copy of 0.2 or older does not know an
 error from a driver the adapter built over your pool or client, and the test is `false`.
 `kind`, `code` and the message read the same on any copy.
