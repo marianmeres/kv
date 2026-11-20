@@ -595,12 +595,12 @@ transaction(operations: Operation[]): Promise<any[]>
 
 Atomicity per adapter:
 
-| Adapter    | Atomic | Notes                                                                                |
-| ---------- | :----: | ------------------------------------------------------------------------------------ |
-| Memory     |   ✓    | Single-threaded by nature                                                            |
-| Redis      |   ✓    | Uses `MULTI`/`EXEC`                                                                  |
-| PostgreSQL |   ✓    | One connection for the whole unit: pinned on a `pg.Pool`, in turn on one `pg.Client` |
-| SQLite     |   ✓    | `BEGIN IMMEDIATE`; a savepoint inside a caller-opened transaction                    |
+| Adapter    | Atomic | Notes                                                                                                                                              |
+| ---------- | :----: | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Memory     |   ✓    | Single-threaded by nature                                                                                                                          |
+| Redis      |   ✓    | Uses `MULTI`/`EXEC`                                                                                                                                |
+| PostgreSQL |   ✓    | One connection for the whole unit: pinned on a `pg.Pool`, in turn on one `pg.Client`; a savepoint inside a transaction opened on the same `Driver` |
+| SQLite     |   ✓    | `BEGIN IMMEDIATE`; a savepoint inside a caller-opened transaction                                                                                  |
 
 Per-operation `options.ttl` is honored by **all** adapters (Redis, PostgreSQL, SQLite, Memory).
 
@@ -834,7 +834,10 @@ connection for the whole unit, and a `COMMIT` that did not commit rejects:
   a kv call issued inside a transaction you opened on that same driver
   (`driver.transaction(async () => { await kv.set(…) })`) joins your transaction and
   commits or rolls back with it. Make the call outside your transaction if it must
-  outlive your rollback.
+  outlive your rollback. A kv `transaction()` issued there is a savepoint of your
+  transaction: when it fails, what it did is undone alone, your transaction is not
+  aborted, and it goes on. The `Driver` has to come from sqlkit 0.3.0 or newer, which
+  has `savepoint()`; an older one is refused at construction, with a `TypeError`.
 
 The adapter listens for the pool's or client's `error` event, so an idle connection the
 server dropped does not end the process: it is reported through `process.emitWarning`

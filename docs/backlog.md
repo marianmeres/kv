@@ -17,6 +17,7 @@ repository, so a row that needs more than one line has its detail below the tabl
 | ⬜     | T10 | 4    | `redis` out of `dependencies`: `src/` imports it for types only. Needs a structural type for the client.                                                                                                                                 |
 | ⏭️     | T11 | 5    | The PostgreSQL statements as sqlkit `sql` fragments. Trigger: a statement that has to be composed from parts, or the two SQL adapters sharing statement code.                                                                            |
 | ✅     | T12 | 6    | sqlkit to `^0.3.1`, in 4.1.0. From 0.3.0 a `SqlError` is recognized across copies of sqlkit, so the docs no longer ask an app to stay on the minor kv installs.                                                                          |
+| ✅     | T13 | 7    | The PostgreSQL adapter's `transaction()` through the driver's `savepoint()`: inside a transaction the host opened on the same `Driver`, a failed unit is undone alone, as on SQLite. In 4.1.0.                                           |
 
 ## T07: the SQLite adapter onto sqlkit
 
@@ -160,3 +161,18 @@ takes (checked: TypeScript refuses it), and an app with its own sqlkit moves it 
 `^0.3.0` together with kv. The adapter calls neither `savepoint` nor sqlkit's migrations,
 whose steps 0.3.0 runs differently. The Node floor did not move: 0.3's `engines` are
 0.2's.
+
+## T13: the PostgreSQL `transaction()` through `savepoint()`
+
+Done on 2026-11-20, for 4.1.0. Until then `transaction()` called the driver's
+`transaction()`, which joins a transaction the host opened on the same `Driver`. A
+joined unit was not all-or-nothing: when an operation failed, the ones before it stayed
+in the host's transaction and committed with it, and a statement Postgres refused
+aborted the host's transaction. On SQLite the same unit was undone alone (`#atomic()`
+uses a savepoint there). Reproduced on sqlkit 0.3.1 against Postgres 18.6.
+
+sqlkit 0.3.0 has `savepoint(fn)`: a savepoint inside a transaction, a transaction
+outside one. So the adapter calls that, and the two SQL adapters answer alike. The case
+is "driver: transaction() inside the host's transaction is undone alone" in
+`tests/driver.test.ts`; it fails on the old call with a `TransactionAbortedError`. A
+`Driver` without `savepoint()` is refused at construction.

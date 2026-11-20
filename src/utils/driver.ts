@@ -52,13 +52,21 @@ export function isPool(db: unknown): db is PgPoolLike {
  * The `Driver` the postgres adapter runs on. A host's `Driver` is used as it is; a
  * pool or a client gets one driver per object. The adapter never closes any of them.
  *
- * @throws {TypeError} For a `Driver` of another dialect.
+ * @throws {TypeError} For a `Driver` of another dialect, or one without `savepoint()`
+ *   (built by a sqlkit older than 0.3.0).
  */
 export function toPgDriver(db: PostgresDb): Driver {
 	if (isDriver(db)) {
 		if (db.dialect !== "pg") {
 			throw new TypeError(
 				`The postgres adapter runs on PostgreSQL: got a "${db.dialect}" driver (${db.adapter})`,
+			);
+		}
+		// `transaction()` runs in the driver's `savepoint()`. The type requires it; a
+		// driver from an older sqlkit, passed past the type, would fail there instead.
+		if (typeof db.savepoint !== "function") {
+			throw new TypeError(
+				"The postgres adapter needs a Driver from @marianmeres/sqlkit 0.3.0 or newer: this one has no savepoint()",
 			);
 		}
 		return db;

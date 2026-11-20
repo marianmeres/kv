@@ -621,10 +621,14 @@ export class AdapterPostgres extends AdapterAbstract {
 	/** @inheritdoc */
 	override async transaction(operations: Operation[]): Promise<any[]> {
 		this._assertInitialized(); // `async` keeps this a rejection
-		// The driver pins one connection (or, on one client, holds every other caller
-		// back), checks the COMMIT, and rolls back when the callback rejects. Called from
-		// inside a transaction the host opened on the same driver, this one joins it.
-		return this.#db.transaction(async (tx) => {
+		// `savepoint()`, not `transaction()`: outside a transaction the two are the same
+		// call, and the driver pins one connection (or, on one client, holds every other
+		// caller back), checks the COMMIT, and rolls back when the callback rejects.
+		// Inside a transaction the host opened on the same driver, the unit is a
+		// savepoint of it: undone alone when it fails, while the host's transaction goes
+		// on and decides the rest. A joined `transaction()` would leave the operations
+		// before the failure in the host's transaction.
+		return this.#db.savepoint(async (tx) => {
 			const results: any[] = [];
 			for (const op of operations) {
 				switch (op.type) {

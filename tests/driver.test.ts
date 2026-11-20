@@ -226,6 +226,87 @@ testsRunner([
 		},
 	},
 	{
+		name: "driver: transaction() inside the host's transaction is undone alone",
+		raw: true,
+		async fn() {
+			const pool = createPg();
+			const driver = createPgDriver(pool);
+			const kv = createKVClient("x:", "postgres", { db: driver, tableName: TABLE });
+			try {
+				await kv.destroy(true);
+				await kv.initialize();
+
+				await driver.transaction(async () => {
+					await kv.set("before", 1);
+
+					// fails before it reaches the database: an invalid key
+					await assert.rejects(
+						kv.transaction([
+							{ type: "set", key: "a", value: 1 },
+							{ type: "set", key: "", value: 2 },
+						]),
+						{ name: "TypeError" },
+					);
+
+					// fails in the database (jsonb refuses \u0000 inside a string), which
+					// without a savepoint would abort the host's transaction
+					const refused = await kv
+						.transaction([
+							{ type: "set", key: "b", value: 1 },
+							{ type: "set", key: "nul", value: "a\u0000b" },
+						])
+						.then(
+							() => undefined,
+							(e: unknown) => e,
+						);
+					assert.ok(refused instanceof SqlError, `got ${String(refused)}`);
+					assert.equal(refused.code, "22P05");
+
+					// the host's transaction goes on
+					await kv.transaction([{ type: "set", key: "c", value: 1 }]);
+					await kv.set("after", 1);
+				});
+
+				assert.deepEqual(
+					await kv.getMultiple(["before", "a", "b", "c", "after"]),
+					{
+						before: 1,
+						a: null,
+						b: null,
+						c: 1,
+						after: 1,
+					},
+				);
+			} finally {
+				await kv.destroy(true);
+				await pool.end();
+			}
+		},
+	},
+	{
+		name: "driver: a Driver without savepoint() is refused",
+		raw: true,
+		fn() {
+			// what a sqlkit older than 0.3.0 built, passed past the type
+			const old = {
+				dialect: "pg",
+				adapter: "stub",
+				capabilities: {},
+				query() {},
+				exec() {},
+				transaction() {},
+			};
+			assert.throws(
+				() =>
+					createKVClient("x:", "postgres", {
+						db: old as any,
+						tableName: TABLE,
+					}),
+				{ name: "TypeError", message: /sqlkit 0\.3\.0 or newer/ },
+			);
+		},
+	},
+	{
 		name: "driver: one driver per pool, however many adapters share it",
 		raw: true,
 		async fn() {

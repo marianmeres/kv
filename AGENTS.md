@@ -69,10 +69,13 @@ dist/                   — `tsc -p tsconfig.build.json` output; gitignored; the
 8. Pattern matching: Redis-style (`*` = any chars, `?` = single char). All other characters — including `.`, `(`, `[`, `%`, `_` — are matched **literally**.
 9. TTL resolution: `options.ttl ?? defaultTtl`; `0` or negative disables expiration for that call (explicitly overrides `defaultTtl`).
 10. Shared helpers live in `abstract.ts` — use `_globToRegex()`, `_resolveTtl()`, `_normalizePairs()`; do not re-implement per-adapter. The SQL adapters keep their own pattern escaping next to the SQL that uses it: Postgres `#likePattern` (LIKE, `ESCAPE '\'`), SQLite `#globPattern` (GLOB — case-sensitive, unlike SQLite's LIKE; `[` → `[[]`). Both escape the namespace as a literal prefix.
-11. Postgres `transaction()` is `this.#db.transaction()`: the driver pins the connection
-    (or, on one `pg.Client`, holds every other caller back), checks the `COMMIT` and rolls
-    back. Nothing in the adapter sends `BEGIN`, `COMMIT` or `ROLLBACK`. Pass the callback's
-    `tx` to the `…On` helpers.
+11. Postgres `transaction()` is `this.#db.savepoint()`. Outside a transaction that is the
+    driver's `transaction()`: it pins the connection (or, on one `pg.Client`, holds every
+    other caller back), checks the `COMMIT` and rolls back. Inside a transaction the host
+    opened on the same `Driver` it is a savepoint of it, so a failed unit is undone alone
+    and the host's transaction goes on, as on SQLite (convention 19). Nothing in the
+    adapter sends `BEGIN`, `COMMIT`, `ROLLBACK` or `SAVEPOINT`. Pass the callback's `tx`
+    to the `…On` helpers.
 12. Redis adapter owns the connection iff `initialize()` opened it (`#weOpened` flag). The Postgres and SQLite adapters never close the `db` they were given; the Postgres adapter never calls `close()` on a driver, its own or the host's (it would end the host's pool or client).
 13. Key validation lives in `_withNs()` — enforced when `options.validateKeys !== false`. Reject empty strings, keys with `\0`, and total `namespace + key` length > 512.
 14. `ttl()` returns `TtlResult = { state: "missing" | "no-ttl" | "expires"; at? }` — discriminated union, not `Date | null | false`.
@@ -87,7 +90,8 @@ dist/                   — `tsc -p tsconfig.build.json` output; gitignored; the
     called once in the constructor, turns a `pg.Pool` or `pg.Client` into a sqlkit
     `Driver` (one per object, in a `WeakMap`: `createPgDriver` adds an `error` listener on
     every call, and several adapters on one pool is normal), and uses a host's `Driver` as
-    it is. A `Driver` of another dialect is a `TypeError`. `options.db` stays what the host
+    it is. A `Driver` of another dialect is a `TypeError`, and so is one without
+    `savepoint()` (built by a sqlkit older than 0.3.0). `options.db` stays what the host
     passed; every statement goes through `this.#db`, with its text and `$n` parameters.
     Nothing in `src/` imports `pg` (it is a dev dependency); `@marianmeres/sqlkit/pg` is
     imported statically, so the package root loads `node:async_hooks`. A kv call issued

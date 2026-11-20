@@ -149,7 +149,8 @@ const client = createKVClient("my-app-namespace:", "postgres", { db });
   unit. On one `pg.Client` the calls take turns: another call waits for the transaction
   to finish.
 - **A call made inside a transaction you opened on the same `Driver` joins it**, and
-  commits or rolls back with it.
+  commits or rolls back with it. A `transaction()` made there is a savepoint of yours:
+  when it fails it is undone alone, and your transaction goes on.
 - **A statement the database refused rejects with sqlkit's `SqlError`**: it carries
   Postgres's `code` and message, with node-postgres's error as `cause`. kv's own
   `TypeError` and `RangeError` are unchanged. To test for it with `instanceof`, your own
@@ -190,9 +191,9 @@ const client = createKVClient("my-app-namespace:", "sqlite", {
 
 ## Changes in 4.1.0
 
-Nothing in kv's API or behaviour changes. kv now installs `@marianmeres/sqlkit` 0.3,
-where 4.0.0 installed 0.1, and two things follow. Each note says first what you have to
-do, if anything.
+No signature changes. kv now installs `@marianmeres/sqlkit` 0.3, where 4.0.0 installed
+0.1, and two things follow from that. A third changes the PostgreSQL adapter at one
+edge. Each note says first what you have to do, if anything.
 
 - **Node 24.20 or later on the 24 line, or 26.6 or later; not 25.** Update Node if yours
   is older. It is what sqlkit requires since 0.2, and kv's `engines` now say the same;
@@ -206,6 +207,13 @@ do, if anything.
     the driver kv builds over your pool or client. From 0.3.0 on, two copies of sqlkit
     know each other's errors, so the test holds even when yours is not the copy kv
     installs.
+- **`transaction()` inside a transaction you opened on the same `Driver` is undone alone
+  when it fails.** Nothing to do. It runs as a savepoint of your transaction, which goes
+  on either way; your commit or rollback still decides what stays. In 4.0.0 the
+  operations before the failure stayed in your transaction, and a statement Postgres
+  refused aborted it. Outside a transaction of yours nothing changes. A `Driver` without
+  `savepoint()` (a sqlkit older than 0.3.0) is refused at construction, with a
+  `TypeError`.
 
 ## Breaking Changes (4.0.0)
 
