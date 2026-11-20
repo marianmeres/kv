@@ -219,14 +219,32 @@ const client = createKVClient("my-app-namespace:", "sqlite", { db });
 - Data is not persisted (in-memory only).
 - Supports optional TTL cleanup via `ttlCleanupIntervalSec` option.
 
-## Changes in 4.2.0
+## Changes in 4.1.0
 
-The sqlite adapter now runs on `@marianmeres/sqlkit`, as the postgres adapter has since
-4.0.0, and takes a sqlkit `Driver` as well as a `DatabaseSync`. A caller who passes a
-`DatabaseSync` sees the same answers, with the edges below. The first five notes are
-about the sqlite adapter, the last about the PostgreSQL one. kv stays on the 4.x line,
-so the second note ships in a minor although 4.0.0 called the same change on PostgreSQL
-breaking. Each note says first what you have to do, if anything.
+No signature changes. The sqlite adapter now runs on `@marianmeres/sqlkit`, as the
+postgres adapter has since 4.0.0, and takes a sqlkit `Driver` as well as a
+`DatabaseSync`; kv now installs sqlkit 0.3, where 4.0.0 installed 0.1. A caller who
+passes a `DatabaseSync` sees the same answers, with the edges below. kv stays on the 4.x
+line, so the sqlite adapter's new error type ships in a minor although 4.0.0 called the
+same change on PostgreSQL breaking. Each note says first what you have to do, if
+anything.
+
+**Node and sqlkit**
+
+- **Node 24.20 or later on the 24 line, or 26.6 or later; not 25.** Update Node if yours
+  is older. It is what sqlkit requires since 0.2, and kv's `engines` now say the same;
+  4.0.0 declared Node >= 24.12. An install on an older Node warns, and fails under
+  `engine-strict`.
+- **An app that depends on `@marianmeres/sqlkit` itself moves it to `^0.3.0` together
+  with kv.** Nothing to do if you never import sqlkit. Two things need it:
+  - A `Driver` you pass as `db` has to come from sqlkit 0.3. The type has a new method,
+    `savepoint`, so TypeScript refuses a driver an older sqlkit built.
+  - `instanceof SqlError` against a sqlkit of 0.2 or older is `false` for an error from
+    the driver kv builds over your pool or client. From 0.3.0 on, two copies of sqlkit
+    know each other's errors, so the test holds even when yours is not the copy kv
+    installs.
+
+**The sqlite adapter**
 
 - **The sqlite adapter's `db` also takes a sqlkit `Driver` of the `sqlite` dialect.**
   Nothing to do; pass one if your app opened its database with `openSqlite()`, or wants
@@ -252,30 +270,9 @@ breaking. Each note says first what you have to do, if anything.
 - **A `db` that is neither a `DatabaseSync` nor a `Driver` is refused at construction,
   with a `TypeError`.** Nothing to do: such a `db` never worked. So is a `Driver` of
   another dialect, or one without a sync tier or `savepoint()`.
-- **On PostgreSQL, `incr`/`decr` on a value that is not a number no longer aborts a
-  transaction you opened on the same `Driver`.** Nothing to do. It still rejects with
-  `TypeError("KV value is not a number")`, but the statement no longer fails in the
-  database, so your transaction goes on and can commit. Before, your commit rejected
-  with a `TransactionAbortedError` and everything in the transaction was lost.
 
-## Changes in 4.1.0
+**The postgres adapter**
 
-No signature changes. kv now installs `@marianmeres/sqlkit` 0.3, where 4.0.0 installed
-0.1, and two things follow from that. The last two notes are about the PostgreSQL
-adapter. Each note says first what you have to do, if anything.
-
-- **Node 24.20 or later on the 24 line, or 26.6 or later; not 25.** Update Node if yours
-  is older. It is what sqlkit requires since 0.2, and kv's `engines` now say the same;
-  4.0.0 declared Node >= 24.12. An install on an older Node warns, and fails under
-  `engine-strict`.
-- **An app that depends on `@marianmeres/sqlkit` itself moves it to `^0.3.0` together
-  with kv.** Nothing to do if you never import sqlkit. Two things need it:
-  - A `Driver` you pass as `db` has to come from sqlkit 0.3. The type has a new method,
-    `savepoint`, so TypeScript refuses a driver an older sqlkit built.
-  - `instanceof SqlError` against a sqlkit of 0.2 or older is `false` for an error from
-    the driver kv builds over your pool or client. From 0.3.0 on, two copies of sqlkit
-    know each other's errors, so the test holds even when yours is not the copy kv
-    installs.
 - **`transaction()` inside a transaction you opened on the same `Driver` is undone alone
   when it fails.** Nothing to do. It runs as a savepoint of your transaction, which goes
   on either way; your commit or rollback still decides what stays. In 4.0.0 the
@@ -283,6 +280,11 @@ adapter. Each note says first what you have to do, if anything.
   refused aborted it. Outside a transaction of yours nothing changes. A `Driver` without
   `savepoint()` (a sqlkit older than 0.3.0) is refused at construction, with a
   `TypeError`.
+- **On PostgreSQL, `incr`/`decr` on a value that is not a number no longer aborts a
+  transaction you opened on the same `Driver`.** Nothing to do. It still rejects with
+  `TypeError("KV value is not a number")`, but the statement no longer fails in the
+  database, so your transaction goes on and can commit. Before, your commit rejected
+  with a `TransactionAbortedError` and everything in the transaction was lost.
 - **A sqlkit `Driver` over PGlite is a tested `db` for the postgres adapter.** Nothing to
   do. 4.0.0 said it was expected to work; now every test of the suite runs on it.
 

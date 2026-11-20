@@ -16,19 +16,19 @@ its own, with a "Changes in" section in the README that names it (T07).
 
 | Status | ID  | Rank | Task                                                                                                                                                                                           |
 | ------ | --- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| ✅     | T07 | –    | The SQLite adapter onto sqlkit: `db` takes a `DatabaseSync` or a `Driver`. A normalizing move: both SQL adapters on one driver contract. In 4.2.0, a minor of its own.                         |
+| ✅     | T07 | –    | The SQLite adapter onto sqlkit: `db` takes a `DatabaseSync` or a `Driver`. A normalizing move: both SQL adapters on one driver contract. In 4.1.0.                                             |
 | ✅     | T08 | –    | CI's PostgreSQL image from `postgres:17` to `postgres:18` in `.github/workflows/ci.yml`, the major of the local and production databases. A change of its own.                                 |
 | ✅     | T09 | –    | PGlite as a tested target: a dev dependency, a fifth client in `tests/_tests-runner.ts` so every test runs on it, and its cases in `tests/driver.test.ts`. In 4.1.0.                           |
 | ⏭️     | T10 | 1    | `redis` out of `dependencies`: `src/` imports it for types only. Needs a structural type for the client. Trigger: a major, and none is planned.                                                |
 | ⏭️     | T11 | 2    | The PostgreSQL statements as sqlkit `sql` fragments. Trigger: a statement that has to be composed from parts, or the two SQL adapters sharing statement code.                                  |
 | ✅     | T12 | –    | sqlkit to `^0.3.1`, in 4.1.0. From 0.3.0 a `SqlError` is recognized across copies of sqlkit, so the docs no longer ask an app to stay on the minor kv installs.                                |
 | ✅     | T13 | –    | The PostgreSQL adapter's `transaction()` through the driver's `savepoint()`: inside a transaction the host opened on the same `Driver`, a failed unit is undone alone, as on SQLite. In 4.1.0. |
-| ✅     | T14 | –    | `incr`/`decr` on a non-number no longer aborts the host's transaction on PostgreSQL: a statement that does not raise. In 4.2.0.                                                                |
+| ✅     | T14 | –    | `incr`/`decr` on a non-number no longer aborts the host's transaction on PostgreSQL: a statement that does not raise. In 4.1.0.                                                                |
 | ⏭️     | T20 | 3    | Durable Objects as a tested target of the SQLite adapter, through sqlkit's driver for them. Trigger: someone wants kv there.                                                                   |
 
 ## T07: the SQLite adapter onto sqlkit
 
-Done on 2026-11-20, for 4.2.0, as a normalizing move: no consumer asked for it. Both SQL
+Done on 2026-11-20, for 4.1.0, as a normalizing move: no consumer asked for it. Both SQL
 adapters now run on one driver contract, take a host's `Driver`, keep a unit
 all-or-nothing the same way and reject with the same errors. It waited on sqlkit: 0.2.0
 keeps compiled statements, without which a statement cost five to six and a half times
@@ -75,7 +75,7 @@ What it costs, in one run on 0.3.1 (µs a call, a database in memory): before th
 0.6 a `get`, 1.1 a `set`, 2.3 an `incr`; on kv's own driver 1.0, 1.2 and 3.1; on a
 host's `Driver` 1.2, 1.4 and 3.5.
 
-What changed for a caller, which the README's "Changes in 4.2.0" names:
+What changed for a caller, which the README's "Changes in 4.1.0" names:
 
 - `db` also takes a `Driver` of the `sqlite` dialect with a sync tier and `savepoint()`.
 - A statement SQLite refused rejects with sqlkit's `SqlError` (a locked database is a
@@ -159,7 +159,7 @@ is "driver: transaction() inside the host's transaction is undone alone" in
 
 ## T14: `incr` on a non-number, inside the host's transaction
 
-Done on 2026-11-20, for 4.2.0. On PostgreSQL the adapter adds in SQL, and a stored value
+Done on 2026-11-20, for 4.1.0. On PostgreSQL the adapter adds in SQL, and a stored value
 that was not a number made the cast raise `22P02`, which the adapter turned into
 `TypeError("KV value is not a number")`. Inside a transaction the host opened on the same
 `Driver`, that failed statement had already aborted the host's transaction: a host that
@@ -178,6 +178,6 @@ are. The case is "driver: incr on a non-number leaves the host's transaction usa
 ## T20: Durable Objects as a tested target
 
 sqlkit has a driver for a Durable Object's SQLite storage, of the `sqlite` dialect and
-with a sync tier, which is what the SQLite adapter takes since 4.2.0 (T07). Whether kv's
+with a sync tier, which is what the SQLite adapter takes since 4.1.0 (T07). Whether kv's
 statements run there (`GLOB`, `json_each`, the upsert, the partial index) has not been
 tried, and a test needs workerd. `API.md` says it is expected to work and is not tested.
