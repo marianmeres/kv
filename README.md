@@ -23,8 +23,8 @@ Versions up to 3.1.1 are also on JSR. From 4.0 the package is published to npm o
 The `redis`, `postgres` and `sqlite` adapters take a client you create yourself: a
 `redis` client; a `pg.Pool`, a `pg.Client` or a
 [`@marianmeres/sqlkit`](https://www.npmjs.com/package/@marianmeres/sqlkit) `Driver`; or a
-`node:sqlite` `DatabaseSync`, which ships with Node. kv does not install `pg`: an app that
-uses the postgres adapter has it already.
+`node:sqlite` `DatabaseSync`, which ships with Node, or a sqlkit `Driver` over SQLite. kv
+does not install `pg`: an app that uses the postgres adapter has it already.
 
 Requires Node 24.20 or later on the 24 line, or 26.6 or later; not 25. That is what
 `@marianmeres/sqlkit` 0.3 requires, which kv installs since 4.1.0.
@@ -173,6 +173,10 @@ const client = createKVClient("my-app-namespace:", "postgres", { db });
 
 ### SQLite
 
+`db` takes an open `node:sqlite` `DatabaseSync`, or a
+[`@marianmeres/sqlkit`](https://www.npmjs.com/package/@marianmeres/sqlkit) `Driver` of the
+`sqlite` dialect:
+
 ```typescript
 import { DatabaseSync } from "node:sqlite";
 
@@ -181,17 +185,31 @@ const client = createKVClient("my-app-namespace:", "sqlite", {
 });
 ```
 
-- Takes an open `node:sqlite` `DatabaseSync` and never closes it — the handle is yours,
-  and can be shared with your own tables or other adapters.
+An app that opened its database with sqlkit passes the driver it shares:
+
+```typescript
+import { openSqlite } from "@marianmeres/sqlkit/sqlite";
+
+const db = openSqlite("kv.db"); // a busy timeout, and the WAL journal for a file
+const client = createKVClient("my-app-namespace:", "sqlite", { db });
+```
+
+- **The adapter never closes what it was given.** `destroy()` leaves the handle or the
+  driver open; it is yours, and can be shared with your own tables or other adapters.
 - Creates a table (default: `__kv`). `tableName` must match `^[A-Za-z_][A-Za-z0-9_]*$` — no
   `schema.` prefix.
 - `node:sqlite` is synchronous: each call blocks the event loop while it runs.
 - Multi-statement operations (`getSet`, `incr`/`decr`, `setMultiple`, `clear`,
   `transaction`) run in `BEGIN IMMEDIATE`. Called inside a transaction you opened on the
-  same handle, they use a savepoint instead, so your `COMMIT`/`ROLLBACK` decides.
+  same handle or through the same `Driver`, they use a savepoint instead: one that fails
+  is undone alone, and your `COMMIT`/`ROLLBACK` decides the rest.
+- **On a `Driver`, calls take their turn.** One made inside a transaction you opened on
+  the driver joins it; one made from elsewhere waits for it to end.
+- **A statement SQLite refused rejects with sqlkit's `SqlError`**, with node:sqlite's
+  error as `cause`. kv's own `TypeError` and `RangeError` are unchanged.
 - The adapter does not touch connection settings. For several processes on one file,
   open it with a busy timeout (`new DatabaseSync(path, { timeout: 5000 })`) and consider
-  `PRAGMA journal_mode = WAL`.
+  `PRAGMA journal_mode = WAL`; `openSqlite()` does both.
 - `cas()` compares the stored JSON text, so object key order matters (as with Memory and
   Redis; PostgreSQL compares `jsonb`, which ignores key order).
 - Supports optional TTL cleanup via `ttlCleanupIntervalSec` option.
@@ -200,6 +218,45 @@ const client = createKVClient("my-app-namespace:", "sqlite", {
 
 - Data is not persisted (in-memory only).
 - Supports optional TTL cleanup via `ttlCleanupIntervalSec` option.
+
+## Changes in 4.2.0
+
+The sqlite adapter now runs on `@marianmeres/sqlkit`, as the postgres adapter has since
+4.0.0, and takes a sqlkit `Driver` as well as a `DatabaseSync`. A caller who passes a
+`DatabaseSync` sees the same answers, with the edges below. The first five notes are
+about the sqlite adapter, the last about the PostgreSQL one. kv stays on the 4.x line,
+so the second note ships in a minor although 4.0.0 called the same change on PostgreSQL
+breaking. Each note says first what you have to do, if anything.
+
+- **The sqlite adapter's `db` also takes a sqlkit `Driver` of the `sqlite` dialect.**
+  Nothing to do; pass one if your app opened its database with `openSqlite()`, or wants
+  kv and its own code on one driver. It needs a sync tier and `savepoint()`, so it comes
+  from sqlkit 0.3.0 or newer; the node:sqlite driver has both. Calls take their turn on
+  it, and one made inside a transaction you opened on it joins that transaction (see
+  [API.md](API.md#adaptersqliteoptions)).
+- **A statement SQLite refused rejects with sqlkit's `SqlError`.** If your code read
+  node:sqlite's `code` or `errcode` on an error from kv, read them on its `cause`, or
+  test `instanceof` and read `kind`. A locked database, for one, is a `BusyError`
+  (`kind` `"busy"`, `retryable`) with the same message, where it was node:sqlite's own
+  `Error` (`code` `"ERR_SQLITE_ERROR"`, `errcode` `5`). `instanceof SqlError` holds when
+  your own `@marianmeres/sqlkit` is 0.3.0 or newer. kv's own `TypeError` and
+  `RangeError` are unchanged.
+- **`options.db` is typed `SqliteDb`, what the option takes: a `DatabaseSync` or a
+  `Driver`.** If you read `client.options.db` back as a `DatabaseSync`, narrow it. It is
+  still the object you passed.
+- **`initialize()` and `destroy(true)` do their work after an `await`.** Await them; they
+  always returned a promise. On a `DatabaseSync`, the first of them imports sqlkit's
+  SQLite driver, and the table is created, or dropped, when the promise settles, no
+  longer before the call returns. Every other operation on a `DatabaseSync` still runs
+  inside the call.
+- **A `db` that is neither a `DatabaseSync` nor a `Driver` is refused at construction,
+  with a `TypeError`.** Nothing to do: such a `db` never worked. So is a `Driver` of
+  another dialect, or one without a sync tier or `savepoint()`.
+- **On PostgreSQL, `incr`/`decr` on a value that is not a number no longer aborts a
+  transaction you opened on the same `Driver`.** Nothing to do. It still rejects with
+  `TypeError("KV value is not a number")`, but the statement no longer fails in the
+  database, so your transaction goes on and can commit. Before, your commit rejected
+  with a `TransactionAbortedError` and everything in the transaction was lost.
 
 ## Changes in 4.1.0
 

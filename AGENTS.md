@@ -27,7 +27,8 @@ src/
 │   ├── postgres.ts     — PostgreSQL adapter
 │   └── sqlite.ts       — SQLite adapter (`node:sqlite`, through a sqlkit driver)
 └── utils/
-    ├── driver.ts       — `toPgDriver()`: the postgres adapter's `db` as a sqlkit `Driver`
+    ├── driver.ts       — `toPgDriver()`: the postgres adapter's `db` as a sqlkit `Driver`;
+    │                     `isDriver()`, which the sqlite adapter shares
     ├── sqlite-driver.ts — `ownSqliteDriver()`: the sqlite adapter's handle as kv's own
     │                     sqlkit `Driver`, its module imported lazily; `SqliteDb`, and
     │                     `assertSqliteDriver()` for a host's `Driver`
@@ -102,8 +103,8 @@ dist/                   — `tsc -p tsconfig.build.json` output; gitignored; the
     driver on its sync tier, so a statement runs inside the call; on a host's `Driver` on
     its async tier, so it waits its turn and joins the host's transaction when it was
     issued inside one. Statement texts open with their keyword (`INSERT`,
-    `SELECT`, `UPDATE`, `DELETE`): the driver keeps only those, and an `exec` (the DDL)
-    empties what it kept, so no `exec` or pragma inside an operation.
+    `SELECT`, `UPDATE`, `DELETE`): the driver keeps only a query or a data change, and an
+    `exec` (the DDL) or a pragma empties what it kept, so neither inside an operation.
 19. SQLite multi-statement operations go through `#atomic(fn)`, `fn` a synchronous
     function over the `SyncDriver` it is given: the driver's `sync.savepoint(fn)`, which
     outside a transaction is `BEGIN IMMEDIATE` … `COMMIT`. When the caller has a `BEGIN`
@@ -149,8 +150,8 @@ dist/                   — `tsc -p tsconfig.build.json` output; gitignored; the
     its own: a consumer whose own sqlkit is on another minor gets two copies. Since 0.3.0
     two copies know each other's `SqlError` (a mark `instanceof` reads; a copy of 0.2.0
     or older has none, so its `instanceof SqlError` misses the errors of the driver kv
-    built). A minor can still change the `Driver` type the PostgreSQL adapter takes, as
-    0.3.0 did with `savepoint`. Moving kv's range across a sqlkit minor therefore takes,
+    built). A minor can still change the `Driver` type both SQL adapters take, as 0.3.0
+    did with `savepoint`. Moving kv's range across a sqlkit minor therefore takes,
     together: `engines.node` to sqlkit's, the README's "Requires Node" and the `^0.x.0`
     in its notes and in `API.md`, and a "Changes in" section in the README telling
     consumers to move their own sqlkit.
