@@ -204,8 +204,11 @@ pnpm run ci            # typecheck + lint + test — what CI runs
 pnpm run build         # tsc -p tsconfig.build.json → dist/
 ```
 
-Releasing (`pnpm run rp` / `rpm`, or `pnpm run release major` + `pnpm publish`) is a human
-action.
+Releasing is a human action: `pnpm run rp` / `rpm` (patch / minor), or
+`pnpm run release major --before-push "pnpm publish"`. `release` runs `pnpm run ci` before
+it writes anything (`--before-bump`), and the publish runs between the tag and the push
+(`--before-push`): a failing gate changes nothing, and a failed publish leaves no tag on
+the remote.
 
 ## Test Environment Variables
 
