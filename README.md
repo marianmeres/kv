@@ -27,8 +27,7 @@ The `redis`, `postgres` and `sqlite` adapters take a client you create yourself:
 uses the postgres adapter has it already.
 
 Requires Node 24.20 or later on the 24 line, or 26.6 or later; not 25. That is what
-`@marianmeres/sqlkit` 0.2 requires, which kv installs. Up to 4.0.0 kv asked for
-Node >= 24.12.
+`@marianmeres/sqlkit` 0.2 requires, which kv installs since 4.1.0.
 
 ## Usage
 
@@ -153,7 +152,8 @@ const client = createKVClient("my-app-namespace:", "postgres", { db });
   commits or rolls back with it.
 - **A statement the database refused rejects with sqlkit's `SqlError`**: it carries
   Postgres's `code` and message, with node-postgres's error as `cause`. kv's own
-  `TypeError` and `RangeError` are unchanged.
+  `TypeError` and `RangeError` are unchanged. To test for it with `instanceof`, keep your
+  own `@marianmeres/sqlkit` on the minor kv installs (`^0.2.0`).
 - Creates a table (default: `__kv`) in your database.
 - `tableName` must match `^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$` (word chars plus an optional `schema.` prefix).
 - Supports optional TTL cleanup via `ttlCleanupIntervalSec` option.
@@ -187,6 +187,22 @@ const client = createKVClient("my-app-namespace:", "sqlite", {
 
 - Data is not persisted (in-memory only).
 - Supports optional TTL cleanup via `ttlCleanupIntervalSec` option.
+
+## Changes in 4.1.0
+
+Nothing in kv's API or behaviour changes. kv now installs `@marianmeres/sqlkit` 0.2,
+where 4.0.0 installed 0.1, and two things follow. Each note says first what you have to
+do, if anything.
+
+- **Node 24.20 or later on the 24 line, or 26.6 or later; not 25.** Update Node if yours
+  is older. It is what sqlkit 0.2 requires, and kv's `engines` now say the same; 4.0.0
+  declared Node >= 24.12. An install on an older Node warns, and fails under
+  `engine-strict`.
+- **An app that depends on `@marianmeres/sqlkit` itself moves it to `^0.2.0` together
+  with kv.** Nothing to do if you never import sqlkit. Two minors of sqlkit install as
+  two copies, each with a `SqlError` class of its own: `instanceof SqlError` against your
+  copy is then `false` for an error from the driver kv builds over your pool or client.
+  `npm ls @marianmeres/sqlkit` should list one version.
 
 ## Breaking Changes (4.0.0)
 

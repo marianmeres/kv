@@ -52,7 +52,7 @@ dist/                   — `tsc -p tsconfig.build.json` output; gitignored; the
    where they don't reach. Nothing is built, tested or documented for Bun or Deno.
    Published to npm only; 3.1.1 was the last version on JSR. `engines.node` is
    `@marianmeres/sqlkit`'s (`^24.20.0 || >=26.6.0`): kv installs it, so kv's floor is
-   never below it. Move the two together, and the README's "Requires Node" with them.
+   never below it (convention 24).
 2. **Erasable TypeScript** — no `enum`, `namespace`, constructor parameter properties;
    `import type` for types; explicit `.ts` import extensions (rewritten to `.js` on emit).
    Node strips types and never checks them: `pnpm run typecheck` is the only type gate.
@@ -94,6 +94,13 @@ dist/                   — `tsc -p tsconfig.build.json` output; gitignored; the
     inside a transaction the host opened on the same `Driver` joins it, by design.
 23. The SQLite adapter takes only a `DatabaseSync`: its constructor refuses a sqlkit
     `Driver` with a `TypeError`.
+24. A sqlkit minor is a kv minor. sqlkit is on `0.x`, so each minor is a caret range of
+    its own: a consumer whose own sqlkit is on another minor gets two copies, and
+    `SqlError` is a plain class, so their `instanceof SqlError` misses the errors of the
+    driver kv built. Moving kv's range across a sqlkit minor therefore takes, together:
+    `engines.node` to sqlkit's, the README's "Requires Node" and the `^0.x.0` in its
+    notes and in `API.md`, and a "Changes in" section in the README telling consumers
+    to move their own sqlkit.
 
 ## Before Making Changes
 

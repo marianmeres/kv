@@ -851,6 +851,12 @@ is a non-numeric `incr`/`decr` target (`22P02`), which it turns into
 `TypeError("KV value is not a number")`, as every adapter does. kv's own `TypeError` and
 `RangeError`, for an invalid key or namespace, are unchanged.
 
+`instanceof SqlError` holds only when your app's `@marianmeres/sqlkit` is the copy kv
+loads. Keep your own dependency on the minor kv installs (`^0.2.0`). On another minor a
+second copy is installed, whose `SqlError` is a class of its own, and the test is `false`
+for an error from a driver the adapter built over your pool or client. `kind`, `code` and
+the message read the same on either copy.
+
 **Table Schema:**
 
 - `key` (VARCHAR 512) - Primary key
