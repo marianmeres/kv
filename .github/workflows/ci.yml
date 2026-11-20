@@ -16,7 +16,7 @@ jobs:
     # Every test runs against all adapters, so the suite needs a real Postgres and Redis.
     services:
       postgres:
-        image: postgres:17
+        image: postgres:18
         env:
           POSTGRES_USER: kv
           POSTGRES_PASSWORD: kv
