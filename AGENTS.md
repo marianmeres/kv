@@ -50,7 +50,9 @@ dist/                   — `tsc -p tsconfig.build.json` output; gitignored; the
 1. **Runtime policy** — Node at the keyboard and in production, npm as the registry. No
    `Deno.*`, `Bun.*`, `bun:*`, `jsr:` or `npm:` specifiers. Web standards first; `node:*`
    where they don't reach. Nothing is built, tested or documented for Bun or Deno.
-   Published to npm only; 3.1.1 was the last version on JSR.
+   Published to npm only; 3.1.1 was the last version on JSR. `engines.node` is
+   `@marianmeres/sqlkit`'s (`^24.20.0 || >=26.6.0`): kv installs it, so kv's floor is
+   never below it. Move the two together, and the README's "Requires Node" with them.
 2. **Erasable TypeScript** — no `enum`, `namespace`, constructor parameter properties;
    `import type` for types; explicit `.ts` import extensions (rewritten to `.js` on emit).
    Node strips types and never checks them: `pnpm run typecheck` is the only type gate.

@@ -24,7 +24,11 @@ The `redis`, `postgres` and `sqlite` adapters take a client you create yourself:
 `redis` client; a `pg.Pool`, a `pg.Client` or a
 [`@marianmeres/sqlkit`](https://www.npmjs.com/package/@marianmeres/sqlkit) `Driver`; or a
 `node:sqlite` `DatabaseSync`, which ships with Node. kv does not install `pg`: an app that
-uses the postgres adapter has it already. Requires Node >= 24.12.
+uses the postgres adapter has it already.
+
+Requires Node 24.20 or later on the 24 line, or 26.6 or later; not 25. That is what
+`@marianmeres/sqlkit` 0.2 requires, which kv installs. Up to 4.0.0 kv asked for
+Node >= 24.12.
 
 ## Usage
 
