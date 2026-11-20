@@ -1167,6 +1167,76 @@ testsRunner([
 			}
 		},
 	},
+	// The next three pin what the adapter guarantees on a handle because it never awaits
+	// a statement. They stay synchronous between issuing a call and reading the handle:
+	// an `await` there would let a deferred statement catch up and hide the loss.
+	{
+		name: "sqlite: a statement runs inside the call",
+		async fn({ clients }) {
+			const client = clients.sqlite;
+			const { db } = client.options;
+			const count = () => db.prepare("SELECT count(*) AS n FROM __kv").get()?.n;
+
+			const written = client.set("a", 1);
+			assert.equal(
+				count(),
+				1,
+				"the row must be written before the promise settles",
+			);
+			assert.equal(await written, true);
+		},
+	},
+	{
+		name: "sqlite: a unit is over when the call returns",
+		async fn({ clients }) {
+			const client = clients.sqlite;
+			const { db } = client.options;
+			await client.set("s", "text");
+
+			// issued together, none awaited: one that keeps, two that fail inside the unit
+			const kept = client.incr("n");
+			const notANumber = assert.rejects(client.incr("s"), TypeError);
+			const invalidKey = assert.rejects(
+				client.transaction([
+					{ type: "set", key: "t1", value: 1 },
+					{ type: "set", key: "", value: 2 },
+				]),
+				TypeError,
+			);
+
+			// no unit is left open, so the host's own transaction is accepted at once
+			assert.equal(db.isTransaction, false);
+			db.exec("BEGIN IMMEDIATE");
+			db.exec("COMMIT");
+
+			assert.equal(await kept, 1);
+			await notANumber;
+			await invalidKey;
+			assert.equal(await client.get("t1"), null, "the failed unit must be undone");
+		},
+	},
+	{
+		name: "sqlite: two adapters on one handle do not overlap their units",
+		async fn({ clients }) {
+			const client = clients.sqlite;
+			const { db } = client.options;
+			const other = createKVClient("other:", "sqlite", { db, tableName: "__kv2" });
+			try {
+				await other.initialize();
+				await client.set("n", 1);
+
+				const answers = Promise.all([
+					client.incr("n"),
+					other.incr("n"),
+					client.incr("n"),
+				]);
+				assert.equal(db.isTransaction, false);
+				assert.deepEqual(await answers, [2, 1, 3]);
+			} finally {
+				await other.destroy(true);
+			}
+		},
+	},
 	{
 		name: "postgres: destroy() during an in-flight cleanup query does not re-arm it",
 		raw: true,
