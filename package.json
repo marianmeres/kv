@@ -58,12 +58,12 @@
     "rpm": "pnpm run release minor -y && pnpm publish"
   },
   "dependencies": {
-    "@marianmeres/clog": "^3.23.0",
-    "@marianmeres/sqlkit": "^0.1.1",
+    "@marianmeres/clog": "^3.23.1",
+    "@marianmeres/sqlkit": "^0.2.0",
     "redis": "^6.3.1"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.6.4",
+    "@biomejs/biome": "^2.6.8",
     "@types/node": "^26.6.6",
     "@types/pg": "^8.23.1",
     "pg": "^8.23.1",
