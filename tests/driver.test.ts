@@ -197,6 +197,29 @@ async function assertUndoneAlone(driver: Driver, kv: AdapterAbstract): Promise<v
 	});
 }
 
+/**
+ * `incr`/`decr` on a value that is not a number rejects with a `TypeError` and fails no
+ * statement, so the host's transaction it ran in goes on and commits.
+ */
+async function assertIncrKeepsTransaction(
+	driver: Driver,
+	kv: AdapterAbstract,
+): Promise<void> {
+	await kv.set("s", "text");
+	await driver.transaction(async () => {
+		await kv.set("before", 1);
+		const notANumber = { name: "TypeError", message: "KV value is not a number" };
+		await assert.rejects(kv.incr("s"), notANumber);
+		await assert.rejects(kv.decr("s"), notANumber);
+		await kv.set("after", 1);
+	});
+	assert.deepEqual(await kv.getMultiple(["before", "s", "after"]), {
+		before: 1,
+		s: "text",
+		after: 1,
+	});
+}
+
 testsRunner([
 	{
 		name: "driver: a sqlkit Driver built by the host answers as the memory adapter does",
@@ -326,6 +349,32 @@ testsRunner([
 			} finally {
 				await kv.destroy(true);
 				await driver.close();
+			}
+		},
+	},
+	{
+		name: "driver: incr on a non-number leaves the host's transaction usable",
+		raw: true,
+		async fn() {
+			const pool = createPg();
+			const lite = await createPglite();
+			try {
+				for (const driver of [createPgDriver(pool), lite]) {
+					const kv = createKVClient("x:", "postgres", {
+						db: driver,
+						tableName: TABLE,
+					});
+					try {
+						await kv.destroy(true);
+						await kv.initialize();
+						await assertIncrKeepsTransaction(driver, kv);
+					} finally {
+						await kv.destroy(true);
+					}
+				}
+			} finally {
+				await lite.close();
+				await pool.end();
 			}
 		},
 	},
