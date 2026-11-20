@@ -8,12 +8,12 @@
 import type { DatabaseSync } from "node:sqlite";
 import { createClog } from "@marianmeres/clog";
 import type { Driver, QueryResult, Row, SyncDriver } from "@marianmeres/sqlkit";
-import { isDriver } from "../utils/driver.ts";
 import {
 	assertSqliteDriver,
 	isDatabaseSync,
 	ownSqliteDriver,
 	type SqliteDb,
+	statesDialect,
 } from "../utils/sqlite-driver.ts";
 import {
 	AdapterAbstract,
@@ -131,7 +131,7 @@ export class AdapterSqlite extends AdapterAbstract {
 		if (!this.options.db) {
 			throw new Error("Missing sqlite database instance");
 		}
-		if (isDriver(this.options.db)) {
+		if (statesDialect(this.options.db)) {
 			assertSqliteDriver(this.options.db);
 			this.#onHostDriver = true;
 		} else if (!isDatabaseSync(this.options.db)) {

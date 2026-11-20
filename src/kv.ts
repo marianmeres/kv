@@ -23,10 +23,13 @@ export type {
 } from "./adapter/abstract.ts";
 export { AdapterAbstract } from "./adapter/abstract.ts";
 export { AdapterMemory, type AdapterMemoryOptions } from "./adapter/memory.ts";
-export { AdapterPostgres, type AdapterPostgresOptions } from "./adapter/postgres.ts";
+export {
+	AdapterPostgres,
+	type AdapterPostgresOptions,
+	type PostgresDb,
+} from "./adapter/postgres.ts";
 export { AdapterRedis, type AdapterRedisOptions } from "./adapter/redis.ts";
 export { AdapterSqlite, type AdapterSqliteOptions } from "./adapter/sqlite.ts";
-export type { PostgresDb } from "./utils/driver.ts";
 export { sleep } from "./utils/sleep.ts";
 export type { SqliteDb } from "./utils/sqlite-driver.ts";
 

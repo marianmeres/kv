@@ -157,6 +157,11 @@ const client = createKVClient("my-app-namespace:", "postgres", { db });
 
 - **The adapter never closes what it was given.** `destroy()` leaves the pool, the client
   or the driver open; ending it is yours. Several adapters can share one.
+- **Over a pool or a client, kv runs on sqlkit's `toPgDriver()`**, which keeps one driver
+  per object. Every adapter on it shares that driver, and so does your own
+  `toPgDriver(pool)`: a kv call issued inside a transaction you opened on it joins that
+  transaction. A driver you built with `createPgDriver()` is a second one; pass it as
+  `db` instead of the pool.
 - **`transaction()` runs on one connection.** On a `pg.Pool` it pins one for the whole
   unit. On one `pg.Client` the calls take turns: another call waits for the transaction
   to finish.

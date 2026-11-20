@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import process from "node:process";
 import { type Driver, SqlError } from "@marianmeres/sqlkit";
-import { createPgDriver } from "@marianmeres/sqlkit/pg";
+import { createPgDriver, toPgDriver } from "@marianmeres/sqlkit/pg";
 import { openSqlite } from "@marianmeres/sqlkit/sqlite";
 import pg from "pg";
 import type { AdapterPostgres } from "../src/adapter/postgres.ts";
@@ -421,7 +421,7 @@ testsRunner([
 						db: old as any,
 						tableName: TABLE,
 					}),
-				{ name: "TypeError", message: /sqlkit 0\.3\.0 or newer/ },
+				{ name: "TypeError", message: /this one has no .*savepoint\(\)/ },
 			);
 		},
 	},
@@ -448,6 +448,60 @@ testsRunner([
 			} finally {
 				for (const kv of adapters) await kv.destroy(true);
 				await pool.end();
+			}
+		},
+	},
+	{
+		name: "driver: on a pool, kv and the host's toPgDriver(pool) are one driver",
+		raw: true,
+		async fn() {
+			const pool = createPg();
+			const kv = createKVClient("x:", "postgres", { db: pool, tableName: TABLE });
+			try {
+				const host = toPgDriver(pool);
+				assert.equal(pool.listenerCount("error"), 1);
+				await kv.destroy(true);
+				await kv.initialize();
+				// one driver, so a call issued inside the host's transaction joins it
+				await assertJoins(host, kv);
+			} finally {
+				await kv.destroy(true);
+				await pool.end();
+			}
+		},
+	},
+	{
+		name: "driver: on one pg.Client, a kv call does not land in the host's transaction",
+		raw: true,
+		async fn() {
+			const client = await connectPgClient();
+			const kv = createKVClient("x:", "postgres", { db: client, tableName: TABLE });
+			try {
+				const host = toPgDriver(client);
+				assert.equal(client.listenerCount("error"), 1);
+				await kv.destroy(true);
+				await kv.initialize();
+
+				const started = Promise.withResolvers<void>();
+				const gate = Promise.withResolvers<void>();
+				const boom = new Error("the host rolls back");
+				const tx = host.transaction(async () => {
+					started.resolve();
+					await gate.promise;
+					throw boom;
+				});
+				await started.promise;
+				// issued from outside the host's transaction while it is open: with a second
+				// driver over the client it would run inside it, and go with its rollback
+				const outside = kv.set("outside", 1);
+				await sleep(20);
+				gate.resolve();
+				await assert.rejects(tx, (e) => e === boom);
+				assert.equal(await outside, true);
+				assert.equal(await kv.get("outside"), 1);
+			} finally {
+				await kv.destroy(true);
+				await client.end();
 			}
 		},
 	},
@@ -486,7 +540,7 @@ testsRunner([
 						createKVClient("x:", "postgres", { db: lite, tableName: TABLE }),
 					{
 						name: "TypeError",
-						message: /runs on PostgreSQL: got a "sqlite" driver/,
+						message: /takes a Driver of the pg dialect, got "sqlite"/,
 					},
 				);
 			} finally {
@@ -636,6 +690,12 @@ testsRunner([
 				assert.throws(
 					() => createKVClient("x:", "sqlite", { db: noSavepoint as any }),
 					{ name: "TypeError", message: /this one has no savepoint\(\)/ },
+				);
+				// the rest of the contract is sqlkit's isDriver(): no capabilities here
+				const notADriver = { ...stub, sync: {} };
+				assert.throws(
+					() => createKVClient("x:", "sqlite", { db: notADriver as any }),
+					{ name: "TypeError", message: /isDriver\(\) refuses this one/ },
 				);
 			} finally {
 				await pool.end();

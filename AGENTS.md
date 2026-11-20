@@ -24,14 +24,12 @@ src/
 │   ├── abstract.ts     — Base class + shared types
 │   ├── memory.ts       — In-memory adapter
 │   ├── redis.ts        — Redis adapter
-│   ├── postgres.ts     — PostgreSQL adapter
+│   ├── postgres.ts     — PostgreSQL adapter; `PostgresDb` (sqlkit's `PgDb`)
 │   └── sqlite.ts       — SQLite adapter (`node:sqlite`, through a sqlkit driver)
 └── utils/
-    ├── driver.ts       — `toPgDriver()`: the postgres adapter's `db` as a sqlkit `Driver`;
-    │                     `isDriver()`, which the sqlite adapter shares
     ├── sqlite-driver.ts — `ownSqliteDriver()`: the sqlite adapter's handle as kv's own
-    │                     sqlkit `Driver`, its module imported lazily; `SqliteDb`, and
-    │                     `assertSqliteDriver()` for a host's `Driver`
+    │                     sqlkit `Driver`, its module imported lazily; `SqliteDb`;
+    │                     `statesDialect()` and `assertSqliteDriver()` for a host's `Driver`
     └── sleep.ts        — Sleep utility function
 
 tests/
@@ -124,13 +122,18 @@ dist/                   — `tsc -p tsconfig.build.json` output; gitignored; the
     whenever the host has a transaction open elsewhere (S4).
 20. SQLite stores `value` as JSON text and `expires_at` as epoch ms (INTEGER), compared against a bound `Date.now()` — never SQLite's own clock. Read integer columns through `Number()` (a handle opened with `readBigInts` returns bigints); the driver's `rowCount` is already a number.
 21. TTL cleanup timers are `unref()`ed (`unref?.()`: browser and worker timers are plain numbers), so a client nobody destroyed cannot hold the process open; `destroy()` still clears them. Postgres's tick awaits its query, so it re-checks `_initialized` before re-arming, and `destroy()` clears `_initialized` before its first `await`. SQLite over a handle stops the cleanup (one error log) when it finds `db.isOpen` false. On a host's `Driver` its tick is Postgres's: it awaits the delete, logs a failure, re-checks `_initialized` and re-arms; a closed driver is told from another failure only by its message, so it is not told apart.
-22. Postgres talks to the database only through `src/utils/driver.ts`: `toPgDriver(db)`,
-    called once in the constructor, turns a `pg.Pool` or `pg.Client` into a sqlkit
-    `Driver` (one per object, in a `WeakMap`: `createPgDriver` adds an `error` listener on
-    every call, and several adapters on one pool is normal), and uses a host's `Driver` as
-    it is. A `Driver` of another dialect is a `TypeError`, and so is one without
-    `savepoint()` (built by a sqlkit older than 0.3.0). `options.db` stays what the host
-    passed; every statement goes through `this.#db`, with its text and `$n` parameters.
+22. Postgres talks to the database only through sqlkit's `toPgDriver(db)` (from
+    `@marianmeres/sqlkit/pg`, since 0.3.2), called once in the constructor, last. It uses
+    a host's `Driver` as it is, and over a `pg.Pool` or `pg.Client` hands back the one
+    driver sqlkit keeps for that object, shared by every adapter on it and by every
+    other caller of `toPgDriver` in the same copy of sqlkit, the host included. Do not
+    build a driver of kv's own over a pool or client: a second driver over one object
+    hides `error` events from both, and over one client sends its statements into the
+    other's open transaction (tests pin both). sqlkit's `TypeError`s pass through
+    unwrapped: a `Driver` of another dialect, one that lacks a member of the contract
+    (`savepoint()` for one, from a sqlkit older than 0.3.0), and anything that is none of
+    the three. `options.db` stays what the host passed; every statement goes through
+    `this.#db`, with its text and `$n` parameters.
     Nothing in `src/` imports `pg` (it is a dev dependency); `@marianmeres/sqlkit/pg` is
     imported statically, so the package root loads `node:async_hooks`. A kv call issued
     inside a transaction the host opened on the same `Driver` joins it, by design.
@@ -138,10 +141,12 @@ dist/                   — `tsc -p tsconfig.build.json` output; gitignored; the
     the `sqlite` dialect with a sync tier and `savepoint()` (node:sqlite's, from
     `openSqlite()` or `createSqliteDriver()`; by its shape Durable Objects' too, which no
     test covers). One flag set in the constructor, `#onHostDriver`, picks the path; it is
-    read in `#open`, `#q`, `#exec`, `#atomic` and the cleanup, and nowhere else. A
-    `Driver` of another dialect, one without a sync tier or without `savepoint()`
-    (`assertSqliteDriver`), and a `db` that is neither (`isDatabaseSync`) are a
-    `TypeError` at construction. `options.db` stays what the host passed. A `BEGIN` sent
+    read in `#open`, `#q`, `#exec`, `#atomic` and the cleanup, and nowhere else. A `db`
+    that states a `dialect` is taken for a `Driver` (`statesDialect`, the rule sqlkit's
+    `toPgDriver` splits by). A `Driver` of another dialect, one without a sync tier or
+    without `savepoint()`, one that sqlkit's `isDriver()` refuses (`assertSqliteDriver`,
+    in that order, so the likely misses get a message that names them), and a `db` that
+    is neither (`isDatabaseSync`) are a `TypeError` at construction. `options.db` stays what the host passed. A `BEGIN` sent
     to the handle behind a host's `Driver` makes a unit fail (`SqlError`, `cannot start a
     transaction within a transaction`): documented, not handled, since kv has no handle
     to look at. kv's methods are async, so they cannot be called from inside the host's
@@ -245,8 +250,9 @@ interface Operation {
 
 type SetMultipleEntry = [string, any] | { key: string; value: any; ttl?: number };
 
-// the postgres adapter's `db`; sqlkit's structural types, so `src/` never imports `pg`
-type PostgresDb = PgPoolLike | PgStandaloneClientLike | Driver;
+// the postgres adapter's `db`: sqlkit's `PgDb`, i.e. `PgPoolLike | PgStandaloneClientLike
+// | Driver`, structural types, so `src/` never imports `pg`
+type PostgresDb = PgDb;
 
 // the sqlite adapter's `db`; `DatabaseSync` is imported as a type only
 type SqliteDb = DatabaseSync | Driver;

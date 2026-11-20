@@ -6,7 +6,7 @@
 
 import { createClog } from "@marianmeres/clog";
 import type { Driver } from "@marianmeres/sqlkit";
-import { type PostgresDb, toPgDriver } from "../utils/driver.ts";
+import { type PgDb, toPgDriver } from "@marianmeres/sqlkit/pg";
 import {
 	AdapterAbstract,
 	type AdapterAbstractOptions,
@@ -15,6 +15,13 @@ import {
 	type SetOptions,
 	type TtlResult,
 } from "./abstract.ts";
+
+/**
+ * What the postgres adapter's `db` option takes: a node-postgres `pg.Pool`, a
+ * connected `pg.Client`, or a sqlkit `Driver` of the `pg` dialect (sqlkit's `PgDb`).
+ * The first two are declared by shape, so nothing here imports `pg`.
+ */
+export type PostgresDb = PgDb;
 
 /**
  * Configuration options for the PostgreSQL KV adapter.
@@ -64,7 +71,11 @@ export class AdapterPostgres extends AdapterAbstract {
 
 	#cleanupTimer: ReturnType<typeof setTimeout> | undefined;
 
-	/** What every statement runs on: built from `options.db` by {@link toPgDriver}. */
+	/**
+	 * What every statement runs on: sqlkit's `toPgDriver(options.db)`. A host's `Driver`
+	 * as it is; over a pool or a client, the one driver sqlkit keeps for that object,
+	 * shared with every other caller of `toPgDriver` on it. The adapter never closes it.
+	 */
 	readonly #db: Driver;
 
 	constructor(namespace: string = "", options: Partial<AdapterPostgresOptions> = {}) {

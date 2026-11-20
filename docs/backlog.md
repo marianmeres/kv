@@ -25,6 +25,7 @@ its own, with a "Changes in" section in the README that names it (T07).
 | ✅     | T13 | –    | The PostgreSQL adapter's `transaction()` through the driver's `savepoint()`: inside a transaction the host opened on the same `Driver`, a failed unit is undone alone, as on SQLite. In 4.1.0. |
 | ✅     | T14 | –    | `incr`/`decr` on a non-number no longer aborts the host's transaction on PostgreSQL: a statement that does not raise. In 4.1.0.                                                                |
 | ⏭️     | T20 | 3    | Durable Objects as a tested target of the SQLite adapter, through sqlkit's driver for them. Trigger: someone wants kv there.                                                                   |
+| ✅     | T21 | –    | The postgres adapter on sqlkit's `toPgDriver()` (0.3.2): one driver per pool or client, the host's included. The sqlite adapter reads the contract through `isDriver()`.                       |
 
 ## T07: the SQLite adapter onto sqlkit
 

@@ -729,11 +729,12 @@ interface Operation {
 What the postgres adapter's `db` option takes.
 
 ```typescript
-import type { Driver } from "@marianmeres/sqlkit";
-import type { PgPoolLike, PgStandaloneClientLike } from "@marianmeres/sqlkit/pg";
+import type { PgDb } from "@marianmeres/sqlkit/pg";
 
-type PostgresDb = PgPoolLike | PgStandaloneClientLike | Driver;
+type PostgresDb = PgDb; // PgPoolLike | PgStandaloneClientLike | Driver
 ```
+
+It is sqlkit's `PgDb`, what its `toPgDriver()` takes:
 
 - `PgPoolLike` — a node-postgres `pg.Pool`.
 - `PgStandaloneClientLike` — a connected node-postgres `pg.Client`.
@@ -841,17 +842,20 @@ interface AdapterPostgresOptions extends AdapterAbstractOptions {
 
 `db` is a [`PostgresDb`](#postgresdb): pass a `pg.Pool` or a connected `pg.Client` as it
 is, or a [`@marianmeres/sqlkit`](https://www.npmjs.com/package/@marianmeres/sqlkit)
-`Driver` your app built. The constructor refuses, with a `TypeError`, a `Driver` of
-another dialect and anything that is neither a pool, a client nor a driver.
+`Driver` your app built. The constructor refuses, with sqlkit's `TypeError`, a `Driver`
+of another dialect or one that lacks a member of sqlkit's contract, and anything that is
+neither a pool, a client nor a driver.
 
 **Connection ownership:** the adapter never closes what it was given — not the pool, not
 the client, not the driver — so `destroy()` leaves it open and several adapters can share
 one.
 
-**Transactions and connections:** every statement runs on a sqlkit `Driver`. The adapter
-builds one over a `pg.Pool` or a `pg.Client`, one per pool or client object however many
-adapters share it, and uses a `Driver` you pass as it is. `transaction()` runs on one
-connection for the whole unit, and a `COMMIT` that did not commit rejects:
+**Transactions and connections:** every statement runs on a sqlkit `Driver`. Over a
+`pg.Pool` or a `pg.Client` it is the one sqlkit's `toPgDriver()` keeps for that object:
+one however many adapters share it, and the same one your app gets from
+`toPgDriver(pool)` when one copy of sqlkit is installed. A `Driver` you pass is used as
+it is. `transaction()` runs on one connection for the whole unit, and a `COMMIT` that
+did not commit rejects:
 
 - **On a `pg.Pool`**, it pins one connection for its length; other calls run on other
   connections at once. A connection whose `ROLLBACK` failed is destroyed, not returned to
@@ -866,6 +870,11 @@ connection for the whole unit, and a `COMMIT` that did not commit rejects:
   transaction: when it fails, what it did is undone alone, your transaction is not
   aborted, and it goes on. The `Driver` has to come from sqlkit 0.3.0 or newer, which
   has `savepoint()`; an older one is refused at construction, with a `TypeError`.
+- **On the driver `toPgDriver()` hands your app** for the pool or client you passed, the
+  same holds as on a `Driver` you pass: it is the adapter's own, so a kv call issued
+  inside a transaction you opened on it joins that transaction. A driver you built with
+  `createPgDriver()` or `createPgClientDriver()` is a second one over the same object:
+  kv's calls never join its transactions. Pass that driver as `db` instead.
 
 The adapter listens for the pool's or client's `error` event, so an idle connection the
 server dropped does not end the process: it is reported through `process.emitWarning`
@@ -933,9 +942,10 @@ interface AdapterSqliteOptions extends AdapterAbstractOptions {
 
 `db` is a [`SqliteDb`](#sqlitedb): an open `DatabaseSync` as it is, or a
 [`@marianmeres/sqlkit`](https://www.npmjs.com/package/@marianmeres/sqlkit) `Driver` your
-app built. The constructor refuses, with a `TypeError`, anything that is neither, a
-`Driver` of another dialect, and a `Driver` without a sync tier or `savepoint()`.
-`options.db` stays what you passed.
+app built. A `db` that states a `dialect` is taken for a `Driver`. The constructor
+refuses, with a `TypeError`, anything that is neither, a `Driver` of another dialect, a
+`Driver` without a sync tier or `savepoint()`, and one that sqlkit's `isDriver()`
+refuses. `options.db` stays what you passed.
 
 **On a `DatabaseSync`**, every statement runs on a sqlkit driver the adapter builds over
 the handle, one per handle however many adapters share it, on its synchronous tier: a

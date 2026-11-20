@@ -8,7 +8,7 @@
  */
 
 import type { DatabaseSync } from "node:sqlite";
-import type { Driver } from "@marianmeres/sqlkit";
+import { type Driver, isDriver } from "@marianmeres/sqlkit";
 
 /**
  * What the sqlite adapter's `db` option takes: a node:sqlite `DatabaseSync`, or a sqlkit
@@ -62,27 +62,48 @@ export async function ownSqliteDriver(db: DatabaseSync): Promise<Driver> {
 }
 
 /**
+ * Whether `db` presents itself as a sqlkit `Driver`: a driver states its dialect, a
+ * `DatabaseSync` has none. sqlkit's `toPgDriver` tells a driver from a pool or a client
+ * by the same rule. Whether it is a driver the adapter can run on,
+ * {@link assertSqliteDriver} decides.
+ */
+export function statesDialect(db: unknown): db is object {
+	return (
+		typeof db === "object" &&
+		db !== null &&
+		typeof (db as { dialect?: unknown }).dialect === "string"
+	);
+}
+
+/**
  * Refuses a host's `Driver` the sqlite adapter cannot run on: one of another dialect,
- * and one without the sync tier or `savepoint()` a unit runs on (a sqlkit older than
- * 0.3.0 built no `savepoint()`).
+ * one without the sync tier or `savepoint()` a unit runs on (a sqlkit older than 0.3.0
+ * built no `savepoint()`), and one that is not a `Driver` as sqlkit's `isDriver()`
+ * reads the contract.
  *
  * @throws {TypeError}
  */
-export function assertSqliteDriver(db: Driver): void {
-	if (db.dialect !== "sqlite") {
+export function assertSqliteDriver(db: object): asserts db is Driver {
+	const d = db as Partial<Driver>;
+	if (d.dialect !== "sqlite") {
 		throw new TypeError(
-			`The sqlite adapter runs on SQLite: got a "${db.dialect}" driver (${db.adapter})`,
+			`The sqlite adapter runs on SQLite: got a "${d.dialect}" driver (${d.adapter})`,
 		);
 	}
 	const missing =
-		typeof db.sync !== "object" || db.sync === null
+		typeof d.sync !== "object" || d.sync === null
 			? "no sync tier"
-			: typeof db.savepoint !== "function"
+			: typeof d.savepoint !== "function"
 				? "no savepoint()"
 				: undefined;
 	if (missing) {
 		throw new TypeError(
 			`The sqlite adapter needs a Driver with a sync tier and savepoint(), from @marianmeres/sqlkit 0.3.0 or newer: this one has ${missing}`,
+		);
+	}
+	if (!isDriver(db)) {
+		throw new TypeError(
+			"The sqlite adapter needs a Driver as @marianmeres/sqlkit states the contract: isDriver() refuses this one",
 		);
 	}
 }
