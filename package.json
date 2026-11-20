@@ -53,7 +53,7 @@
     "test:watch": "node --test --test-concurrency=1 --watch --env-file-if-exists=.env \"tests/**/*.test.ts\"",
     "ci": "pnpm run typecheck && pnpm run lint && pnpm test",
     "prepublishOnly": "pnpm run ci && pnpm run build",
-    "release": "npx --yes @marianmeres/release@^2.2.0",
+    "release": "npx --yes @marianmeres/release@^2.3.0",
     "rp": "pnpm run release -y && pnpm publish",
     "rpm": "pnpm run release minor -y && pnpm publish"
   },
