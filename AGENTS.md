@@ -25,9 +25,11 @@ src/
 │   ├── memory.ts       — In-memory adapter
 │   ├── redis.ts        — Redis adapter
 │   ├── postgres.ts     — PostgreSQL adapter
-│   └── sqlite.ts       — SQLite adapter (`node:sqlite`)
+│   └── sqlite.ts       — SQLite adapter (`node:sqlite`, through a sqlkit driver)
 └── utils/
     ├── driver.ts       — `toPgDriver()`: the postgres adapter's `db` as a sqlkit `Driver`
+    ├── sqlite-driver.ts — `ownSqliteDriver()`: the sqlite adapter's handle as kv's own
+    │                     sqlkit `Driver`, its module imported lazily
     └── sleep.ts        — Sleep utility function
 
 tests/
@@ -79,15 +81,35 @@ dist/                   — `tsc -p tsconfig.build.json` output; gitignored; the
     and the host's transaction goes on, as on SQLite (convention 19). Nothing in the
     adapter sends `BEGIN`, `COMMIT`, `ROLLBACK` or `SAVEPOINT`. Pass the callback's `tx`
     to the `…On` helpers.
-12. Redis adapter owns the connection iff `initialize()` opened it (`#weOpened` flag). The Postgres and SQLite adapters never close the `db` they were given; the Postgres adapter never calls `close()` on a driver, its own or the host's (it would end the host's pool or client).
+12. Redis adapter owns the connection iff `initialize()` opened it (`#weOpened` flag). The Postgres and SQLite adapters never close the `db` they were given; the Postgres adapter never calls `close()` on a driver, its own or the host's (it would end the host's pool or client). The SQLite adapter never calls `close()` on its own driver either: sqlkit's `createSqliteDriver(db).close()` closes the host's handle.
 13. Key validation lives in `_withNs()` — enforced when `options.validateKeys !== false`. Reject empty strings, keys with `\0`, and total `namespace + key` length > 512.
 14. `ttl()` returns `TtlResult = { state: "missing" | "no-ttl" | "expires"; at? }` — discriminated union, not `Date | null | false`.
 15. `incr`/`decr`/`getSet`/`cas`/`setIfAbsent` must be atomic: Redis = Lua or NX; Postgres = UPSERT/UPDATE with RETURNING; SQLite = a single UPSERT/UPDATE (`setIfAbsent`, `cas`) or a read-modify-write inside `#atomic()` (`getSet`, `incr`/`decr`); Memory = plain read-modify-write (single-threaded).
-16. Non-numeric `incr`/`decr` target throws `TypeError("KV value is not a number")`. In Postgres, the upsert's `DO UPDATE` has a `WHERE` that skips a live value that is not a JSON number, so the statement returns no row and raises nothing (a transaction the host opened on the same `Driver` is not aborted); no row is the `TypeError`, and the `22P02` catch on the sqlkit `SqlError`'s `code` is a backstop for a delta PostgreSQL cannot cast. SQLite checks `typeof` in JS, like Memory. No other database error is caught, wrapped or translated: the caller gets sqlkit's `SqlError`.
+16. Non-numeric `incr`/`decr` target throws `TypeError("KV value is not a number")`. In Postgres, the upsert's `DO UPDATE` has a `WHERE` that skips a live value that is not a JSON number, so the statement returns no row and raises nothing (a transaction the host opened on the same `Driver` is not aborted); no row is the `TypeError`, and the `22P02` catch on the sqlkit `SqlError`'s `code` is a backstop for a delta PostgreSQL cannot cast. SQLite checks `typeof` in JS, like Memory. Neither SQL adapter catches, wraps or translates any other database error: the caller gets sqlkit's `SqlError` (on SQLite with node:sqlite's error as its `cause`).
 17. `keysIter` in both SQL adapters pages by keyset, 500 keys a page, so nothing stays open between yields and an early consumer break leaves nothing to release. It is not one snapshot. SQLite pages with `key > last`. Postgres pages in byte order on the `text_pattern_ops` prefix index (`key ~>~ $2`, `ORDER BY key USING ~<~`); a plain `key > $2 ORDER BY key` would walk the primary key across every namespace. Postgres `keys()` has no SQL `ORDER BY` for the same reason: it sorts in JS.
-18. SQLite: `src/` imports `node:sqlite` **type-only** — the caller passes the `DatabaseSync`. A runtime import would make every consumer of the package load `node:sqlite`.
-19. SQLite multi-statement operations go through `#atomic()`: `BEGIN IMMEDIATE`, or a savepoint when `db.isTransaction` (the caller's transaction on the same handle). The callback must stay synchronous — an `await` inside would let other work join the transaction.
-20. SQLite stores `value` as JSON text and `expires_at` as epoch ms (INTEGER), compared against a bound `Date.now()` — never SQLite's own clock. Read counts/integers through `Number()` (a handle opened with `readBigInts` returns bigints).
+18. SQLite talks to the database through `src/utils/sqlite-driver.ts`: `ownSqliteDriver(db)`
+    builds kv's own sqlkit driver over the host's `DatabaseSync` (`createSqliteDriver`, one
+    per handle in a `WeakMap`, keeping 128 compiled statements: without the number every
+    call compiles). `@marianmeres/sqlkit/sqlite` loads `node:sqlite`, so it is imported
+    there with `import()`, when `initialize()` or `destroy(true)` first opens the driver.
+    Nothing in `src/` imports it statically, and `node:sqlite` only as types: a static
+    import would make every consumer of the package load `node:sqlite` (a test checks the
+    package root loads none). Every statement goes through `#q()` on the driver's sync
+    tier, so it runs inside the call. Statement texts open with their keyword (`INSERT`,
+    `SELECT`, `UPDATE`, `DELETE`): the driver keeps only those, and an `exec` (the DDL)
+    empties what it kept, so no `exec` or pragma inside an operation.
+19. SQLite multi-statement operations go through `#atomic(fn)`, `fn` a synchronous
+    function over the `SyncDriver` it is given: the driver's `sync.savepoint(fn)`, which
+    outside a transaction is `BEGIN IMMEDIATE` … `COMMIT`. When the caller has a `BEGIN`
+    open on the handle (`db.isTransaction`), the driver does not know that transaction and
+    SQLite refuses a second one, so `SAVEPOINT`, `ROLLBACK TO` and `RELEASE` go to the
+    handle and the unit's statements through the driver: the one place the adapter still
+    talks to the handle, besides `isOpen`. Neither `fn` nor `#atomic` may `await`: a unit
+    is over when the call returns, and tests pin it. The statements a unit shares with
+    `set`/`get`/`delete` are built once (`#setStatement`, `#getStatement`,
+    `#deleteStatement`), and the key is validated there, so an invalid key throws inside
+    the unit and undoes it.
+20. SQLite stores `value` as JSON text and `expires_at` as epoch ms (INTEGER), compared against a bound `Date.now()` — never SQLite's own clock. Read integer columns through `Number()` (a handle opened with `readBigInts` returns bigints); the driver's `rowCount` is already a number.
 21. TTL cleanup timers are `unref()`ed (`unref?.()`: browser and worker timers are plain numbers), so a client nobody destroyed cannot hold the process open; `destroy()` still clears them. Postgres's tick awaits its query, so it re-checks `_initialized` before re-arming, and `destroy()` clears `_initialized` before its first `await`. SQLite stops the cleanup (one error log) when it finds `db.isOpen` false.
 22. Postgres talks to the database only through `src/utils/driver.ts`: `toPgDriver(db)`,
     called once in the constructor, turns a `pg.Pool` or `pg.Client` into a sqlkit

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
 import { DatabaseSync } from "node:sqlite";
+import { SqlError } from "@marianmeres/sqlkit";
 import { createKVClient } from "../src/kv.ts";
 import { sleep } from "../src/utils/sleep.ts";
 import { createPg } from "./_pg.ts";
@@ -1235,6 +1236,88 @@ testsRunner([
 			} finally {
 				await other.destroy(true);
 			}
+		},
+	},
+	{
+		name: "sqlite: a statement SQLite refused rejects with a SqlError",
+		raw: true,
+		async fn() {
+			const dir = mkdtempSync(join(tmpdir(), "kv-sqlite-"));
+			const path = join(dir, "kv.db");
+			const holder = new DatabaseSync(path);
+			// timeout 0: a lock another connection holds is refused at once
+			const db = new DatabaseSync(path, { timeout: 0 });
+			const client = createKVClient("x:", "sqlite", { db });
+			const busy = (err: unknown) => {
+				assert(err instanceof SqlError, `not a SqlError: ${err}`);
+				assert.equal(err.kind, "busy");
+				assert.equal(err.retryable, true);
+				assert.match(err.message, /locked/);
+				assert(err.cause instanceof Error, "node:sqlite's error is the cause");
+				return true;
+			};
+			try {
+				await client.initialize();
+				holder.exec("BEGIN IMMEDIATE");
+				// one statement, and a unit (its BEGIN IMMEDIATE is what is refused)
+				await assert.rejects(client.set("k", 1), busy);
+				await assert.rejects(client.incr("n"), busy);
+				holder.exec("ROLLBACK");
+				assert.equal(await client.incr("n"), 1);
+			} finally {
+				await client.destroy();
+				db.close();
+				holder.close();
+				rmSync(dir, { recursive: true, force: true });
+			}
+		},
+	},
+	{
+		name: "sqlite: the package root does not load node:sqlite",
+		raw: true,
+		async fn() {
+			// `process.moduleLoadList` is not a documented API: if it is ever gone, the
+			// child fails, and so does this test. The second list proves the filter sees
+			// node:sqlite once something does load it.
+			const script = `
+				const { createKVClient } = await import("./src/index.ts");
+				const client = createKVClient("x:", "memory");
+				await client.initialize();
+				await client.set("k", 1);
+				await client.destroy();
+				const loaded = () =>
+					process.moduleLoadList.filter((m) => m.endsWith(" sqlite"));
+				const before = loaded();
+				await import("node:sqlite");
+				console.log(JSON.stringify({ before, after: loaded() }));
+			`;
+			const child = spawn(process.execPath, ["--input-type=module", "-e", script], {
+				cwd: join(import.meta.dirname, ".."),
+				stdio: ["ignore", "pipe", "pipe"],
+			});
+			let out = "";
+			let err = "";
+			child.stdout.setEncoding("utf8");
+			child.stderr.setEncoding("utf8");
+			child.stdout.on("data", (chunk: string) => (out += chunk));
+			child.stderr.on("data", (chunk: string) => (err += chunk));
+			const code = await new Promise<number | null>((resolve) =>
+				child.once("close", (code) => resolve(code)),
+			);
+			assert.equal(code, 0, err);
+			const { before, after } = JSON.parse(out);
+			assert.deepEqual(before, [], "the package root loaded node:sqlite");
+			assert(after.length > 0, `the filter missed node:sqlite: ${out}`);
+		},
+	},
+	{
+		name: "sqlite: a db that is not a DatabaseSync is refused",
+		raw: true,
+		fn() {
+			assert.throws(
+				() => createKVClient("x:", "sqlite", { db: {} as DatabaseSync }),
+				TypeError,
+			);
 		},
 	},
 	{
