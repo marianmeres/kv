@@ -7,6 +7,7 @@
  * is ended), so the process must exit by itself.
  */
 import process from "node:process";
+import { openSqlite } from "@marianmeres/sqlkit/sqlite";
 import { createKVClient } from "../src/kv.ts";
 import { createPg } from "./_pg.ts";
 import { createSqlite } from "./_sqlite.ts";
@@ -18,6 +19,12 @@ if (type === "memory") {
 } else if (type === "sqlite") {
 	const db = createSqlite();
 	await createKVClient("x:", "sqlite", { db, ttlCleanupIntervalSec: 1 }).initialize();
+} else if (type === "sqlite-driver") {
+	// the sqlite adapter on a sqlkit Driver: its tick awaits the delete, then re-arms
+	await createKVClient("x:", "sqlite", {
+		db: openSqlite(),
+		ttlCleanupIntervalSec: 1,
+	}).initialize();
 } else if (type === "postgres") {
 	// One connection, so queries run in order: `SELECT 1` returns only after the first
 	// cleanup query, which initialize() starts without awaiting it. Ending the pool

@@ -2,14 +2,19 @@
  * @module
  *
  * SQLite key-value storage adapter implementation (`node:sqlite`, through a sqlkit
- * driver).
+ * driver: kv's own over a handle, or the host's).
  */
 
 import type { DatabaseSync } from "node:sqlite";
 import { createClog } from "@marianmeres/clog";
 import type { Driver, QueryResult, Row, SyncDriver } from "@marianmeres/sqlkit";
 import { isDriver } from "../utils/driver.ts";
-import { isDatabaseSync, ownSqliteDriver } from "../utils/sqlite-driver.ts";
+import {
+	assertSqliteDriver,
+	isDatabaseSync,
+	ownSqliteDriver,
+	type SqliteDb,
+} from "../utils/sqlite-driver.ts";
 import {
 	AdapterAbstract,
 	type AdapterAbstractOptions,
@@ -24,10 +29,12 @@ import {
  */
 export interface AdapterSqliteOptions extends AdapterAbstractOptions {
 	/**
-	 * An open `node:sqlite` database, e.g. `new DatabaseSync("kv.db")`. The caller owns
-	 * it: `destroy()` never closes it, so one handle can be shared across adapters.
+	 * The database: an open `node:sqlite` handle, e.g. `new DatabaseSync("kv.db")`, or a
+	 * sqlkit `Driver` of the `sqlite` dialect with a sync tier, e.g. `openSqlite("kv.db")`.
+	 * The caller owns it: `destroy()` never closes it, so one can be shared across
+	 * adapters.
 	 */
-	db: DatabaseSync;
+	db: SqliteDb;
 	/**
 	 * Name of the table to use for storing key-value pairs.
 	 * The table will be created automatically if it doesn't exist.
@@ -60,13 +67,18 @@ type Statement = [text: string, params: unknown[]];
  * and index on initialization.
  *
  * @remarks
- * - Every statement goes through a sqlkit driver over the handle, on its synchronous
- *   tier: one driver per handle, imported on first use.
+ * - Over a `DatabaseSync`, every statement goes through kv's own sqlkit driver over the
+ *   handle, on its synchronous tier: one driver per handle, imported on first use. A
+ *   statement runs inside the call, and nothing else on the handle interleaves.
+ * - Over a sqlkit `Driver` the host passed, a statement takes its turn on the driver's
+ *   async tier: it waits for a transaction the host has open elsewhere, and joins one
+ *   it was issued inside.
  * - `node:sqlite` is synchronous, so every operation blocks the event loop for its
- *   duration (typically microseconds) and nothing else on the handle interleaves.
+ *   duration (typically microseconds).
  * - Multi-statement operations run in `BEGIN IMMEDIATE`, so they stay atomic against
  *   other connections and processes on the same file. Inside a transaction the caller
- *   already opened on the same handle, they use a savepoint instead.
+ *   already opened (on the same handle, or through the same `Driver`), they use a
+ *   savepoint instead.
  * - A statement SQLite refused rejects with sqlkit's `SqlError`, node:sqlite's error as
  *   its `cause`.
  *
@@ -79,6 +91,10 @@ type Statement = [text: string, params: unknown[]];
  * });
  * await client.initialize();
  * await client.set("session:abc", { userId: 123 }, { ttl: 3600 });
+ *
+ * // or on a sqlkit Driver
+ * import { openSqlite } from "@marianmeres/sqlkit/sqlite";
+ * const onDriver = createKVClient("myapp:", "sqlite", { db: openSqlite("kv.db") });
  * ```
  */
 export class AdapterSqlite extends AdapterAbstract {
@@ -96,10 +112,18 @@ export class AdapterSqlite extends AdapterAbstract {
 	#cleanupTimer: ReturnType<typeof setTimeout> | undefined;
 
 	/**
-	 * What every statement runs on: kv's own driver over `options.db`, set by
-	 * {@link #open}. Never closed: that would close the host's handle.
+	 * What every statement runs on, set by {@link #open}: kv's own driver over
+	 * `options.db`, or `options.db` itself when it is a `Driver`. Never closed: either
+	 * way that would close what the host owns.
 	 */
 	#driver: Driver | undefined;
+
+	/**
+	 * Whether `options.db` is a host's `Driver` rather than a handle. The one flag that
+	 * decides the path, read in {@link #open}, {@link #q}, {@link #atomic},
+	 * {@link #exec} and the cleanup, and nowhere else.
+	 */
+	readonly #onHostDriver: boolean = false;
 
 	constructor(namespace: string = "", options: Partial<AdapterSqliteOptions> = {}) {
 		super(namespace);
@@ -108,13 +132,11 @@ export class AdapterSqlite extends AdapterAbstract {
 			throw new Error("Missing sqlite database instance");
 		}
 		if (isDriver(this.options.db)) {
+			assertSqliteDriver(this.options.db);
+			this.#onHostDriver = true;
+		} else if (!isDatabaseSync(this.options.db)) {
 			throw new TypeError(
-				"The sqlite adapter takes a node:sqlite DatabaseSync; a sqlkit Driver is not supported yet",
-			);
-		}
-		if (!isDatabaseSync(this.options.db)) {
-			throw new TypeError(
-				"The sqlite adapter takes a node:sqlite DatabaseSync as db",
+				"The sqlite adapter takes a node:sqlite DatabaseSync or a sqlkit Driver of the sqlite dialect as db",
 			);
 		}
 		// tableName is spliced into SQL verbatim, so guard against surprises.
@@ -125,20 +147,43 @@ export class AdapterSqlite extends AdapterAbstract {
 		}
 	}
 
-	/** The driver, built (and its module imported) on the first call. */
+	/**
+	 * The driver: a host's `Driver` as it is, or kv's own over the handle, built (and its
+	 * module imported) on the first call.
+	 */
 	async #open(): Promise<Driver> {
-		this.#driver ??= await ownSqliteDriver(this.options.db);
+		this.#driver ??= this.#onHostDriver
+			? (this.options.db as Driver)
+			: await ownSqliteDriver(this.options.db as DatabaseSync);
 		return this.#driver;
 	}
 
-	/** The driver's sync tier: a statement runs inside the call. */
+	/**
+	 * kv's own driver's sync tier: a statement runs inside the call. Never on a host's
+	 * `Driver`, outside {@link #atomic}: there it is a `TypeError` whenever the host has a
+	 * transaction open elsewhere.
+	 */
 	get #sync(): SyncDriver {
 		return this.#driver!.sync!;
 	}
 
-	/** Run one statement. */
-	#q<T = Row>(text: string, params: unknown[]): QueryResult<T> {
+	/**
+	 * Run one statement. On a host's `Driver`, on its async tier: it waits its turn, and
+	 * joins the host's transaction when the call was issued inside it. On kv's own
+	 * driver, on the sync tier: it has run when this returns.
+	 */
+	#q<T = Row>(
+		text: string,
+		params: unknown[],
+	): QueryResult<T> | Promise<QueryResult<T>> {
+		if (this.#onHostDriver) return this.#driver!.query<T>(text, params);
 		return this.#sync.query<T>(text, params);
+	}
+
+	/** Run a script: the DDL of `initialize()` and `destroy(true)`. */
+	#exec(script: string): void | Promise<void> {
+		if (this.#onHostDriver) return this.#driver!.exec(script);
+		this.#sync.exec(script);
 	}
 
 	#expiresAt(ttl: number | undefined): number | null {
@@ -151,10 +196,18 @@ export class AdapterSqlite extends AdapterAbstract {
 	 * statements. `fn` must stay synchronous (an `await` inside would let other work join
 	 * the transaction), and there is no `await` here either: the unit is over when the
 	 * call returns.
+	 *
+	 * On a host's `Driver`, the same `fn` runs inside the driver's async `savepoint()`,
+	 * on its sync tier (sqlkit's rule S3): the unit waits its turn, is a savepoint of the
+	 * host's transaction when it was issued inside one, and runs without a break.
 	 */
 	async #atomic<T>(fn: (tx: SyncDriver) => T): Promise<T> {
+		if (this.#onHostDriver) {
+			const driver = this.#driver!;
+			return driver.savepoint(async () => fn(driver.sync!));
+		}
 		const sync = this.#sync;
-		const handle = this.options.db;
+		const handle = this.options.db as DatabaseSync;
 		// No transaction of the caller's: the driver's own. (A closed handle goes this way
 		// too: `isTransaction` would throw, the driver answers with a `SqlError`.)
 		if (!handle.isOpen || !handle.isTransaction) return sync.savepoint(fn);
@@ -184,7 +237,7 @@ export class AdapterSqlite extends AdapterAbstract {
 		const { tableName } = this.options;
 		await this.#open();
 
-		this.#sync.exec(`
+		await this.#exec(`
             CREATE TABLE IF NOT EXISTS ${tableName} (
                 key TEXT NOT NULL PRIMARY KEY,
                 value TEXT NOT NULL,
@@ -192,7 +245,7 @@ export class AdapterSqlite extends AdapterAbstract {
             )
         `);
 
-		this.#sync.exec(`
+		await this.#exec(`
             CREATE INDEX IF NOT EXISTS idx_${tableName}_expires_at
                 ON ${tableName} (expires_at)
                 WHERE expires_at IS NOT NULL
@@ -213,33 +266,45 @@ export class AdapterSqlite extends AdapterAbstract {
 		if (hard) {
 			// `destroy(true)` may come before `initialize()`: open the driver here too
 			await this.#open();
-			this.#sync.exec(`DROP TABLE IF EXISTS ${this.options.tableName}`);
+			await this.#exec(`DROP TABLE IF EXISTS ${this.options.tableName}`);
 		}
 	}
 
-	#maybeTTLCleanup() {
+	async #maybeTTLCleanup() {
 		clearTimeout(this.#cleanupTimer); // safety
 		if (this.options.ttlCleanupIntervalSec) {
 			const { db, tableName, logger } = this.options;
+			const expired = `DELETE FROM ${tableName}
+                    WHERE expires_at IS NOT NULL AND expires_at <= ?`;
 
-			// The caller closed the handle without destroy(). Every later tick would fail
-			// the same way, so say it once and stop.
-			if (!db.isOpen) {
-				logger?.error?.(
-					"TTL cleanup stopped: the database handle was closed before destroy()",
-				);
-				return;
-			}
+			if (this.#onHostDriver) {
+				// The PostgreSQL adapter's tick: the delete waits its turn. A closed driver
+				// cannot be told from another failure but by its message, so every failure
+				// is logged and the tick goes on.
+				try {
+					await this.#q(expired, [Date.now()]);
+				} catch (err) {
+					logger?.error?.(`TTL cleanup error: ${err}`);
+				}
 
-			// do the cleanup now
-			try {
-				this.#q(
-					`DELETE FROM ${tableName}
-                    WHERE expires_at IS NOT NULL AND expires_at <= ?`,
-					[Date.now()],
-				);
-			} catch (err) {
-				logger?.error?.(`TTL cleanup error: ${err}`);
+				// destroy() ran while the delete was waiting or running
+				if (!this._initialized) return;
+			} else {
+				// The caller closed the handle without destroy(). Every later tick would
+				// fail the same way, so say it once and stop.
+				if (!(db as DatabaseSync).isOpen) {
+					logger?.error?.(
+						"TTL cleanup stopped: the database handle was closed before destroy()",
+					);
+					return;
+				}
+
+				// do the cleanup now
+				try {
+					this.#q(expired, [Date.now()]);
+				} catch (err) {
+					logger?.error?.(`TTL cleanup error: ${err}`);
+				}
 			}
 
 			// schedule next...

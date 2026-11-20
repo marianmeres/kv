@@ -19,10 +19,14 @@ testsRunner([
 	{
 		name: "info sanity check",
 		fn({ clients }) {
+			// `pglite` is the postgres adapter on another database, `sqliteDriver` the
+			// sqlite adapter on a sqlkit Driver
+			const types: Record<string, string> = {
+				pglite: "postgres",
+				sqliteDriver: "sqlite",
+			};
 			for (const [name, client] of Object.entries(clients)) {
-				// `pglite` is the postgres adapter on another database
-				const type = name === "pglite" ? "postgres" : name;
-				assert.deepEqual(client.info().type, type);
+				assert.deepEqual(client.info().type, types[name] ?? name);
 			}
 		},
 		// only: true,
@@ -1056,14 +1060,17 @@ testsRunner([
 				RangeError,
 			);
 			assert.deepEqual(await client.get("rollback:good"), null);
-			assert(!client.options.db.isTransaction, "no transaction may be left open");
+			assert(
+				!(client.options.db as DatabaseSync).isTransaction,
+				"no transaction may be left open",
+			);
 		},
 	},
 	{
 		name: "sqlite: joins a transaction the caller opened on the same handle",
 		async fn({ clients }) {
 			const client = clients.sqlite;
-			const { db } = client.options;
+			const db = client.options.db as DatabaseSync;
 
 			// the caller's ROLLBACK undoes the adapter's writes, atomic ones included
 			db.exec("BEGIN");
@@ -1175,7 +1182,7 @@ testsRunner([
 		name: "sqlite: a statement runs inside the call",
 		async fn({ clients }) {
 			const client = clients.sqlite;
-			const { db } = client.options;
+			const db = client.options.db as DatabaseSync;
 			const count = () => db.prepare("SELECT count(*) AS n FROM __kv").get()?.n;
 
 			const written = client.set("a", 1);
@@ -1191,7 +1198,7 @@ testsRunner([
 		name: "sqlite: a unit is over when the call returns",
 		async fn({ clients }) {
 			const client = clients.sqlite;
-			const { db } = client.options;
+			const db = client.options.db as DatabaseSync;
 			await client.set("s", "text");
 
 			// issued together, none awaited: one that keeps, two that fail inside the unit
@@ -1220,7 +1227,7 @@ testsRunner([
 		name: "sqlite: two adapters on one handle do not overlap their units",
 		async fn({ clients }) {
 			const client = clients.sqlite;
-			const { db } = client.options;
+			const db = client.options.db as DatabaseSync;
 			const other = createKVClient("other:", "sqlite", { db, tableName: "__kv2" });
 			try {
 				await other.initialize();
@@ -1354,7 +1361,7 @@ testsRunner([
 		async fn() {
 			const childPath = join("tests", "_no-destroy-child.ts");
 			try {
-				for (const type of ["memory", "sqlite", "postgres"]) {
+				for (const type of ["memory", "sqlite", "sqlite-driver", "postgres"]) {
 					const child = spawn(process.execPath, [childPath, type], {
 						cwd: join(import.meta.dirname, ".."),
 						stdio: ["ignore", "pipe", "pipe"],

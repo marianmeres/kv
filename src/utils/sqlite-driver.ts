@@ -3,11 +3,18 @@
  *
  * The one seam between the sqlite adapter and sqlkit's node:sqlite driver. That driver's
  * module imports `node:sqlite` when it loads, so it is imported here lazily, and only
- * for a `DatabaseSync`: the package root loads no `node:sqlite`.
+ * for a `DatabaseSync`: the package root loads no `node:sqlite`. A sqlkit `Driver` the
+ * host passes is checked here and used as it is.
  */
 
 import type { DatabaseSync } from "node:sqlite";
 import type { Driver } from "@marianmeres/sqlkit";
+
+/**
+ * What the sqlite adapter's `db` option takes: a node:sqlite `DatabaseSync`, or a sqlkit
+ * `Driver` of the `sqlite` dialect with a sync tier (`openSqlite()`'s, for one).
+ */
+export type SqliteDb = DatabaseSync | Driver;
 
 /**
  * Compiled statements kv's own driver keeps, by their text: what sqlkit's `openSqlite()`
@@ -52,4 +59,30 @@ export async function ownSqliteDriver(db: DatabaseSync): Promise<Driver> {
 		drivers.set(db, driver);
 	}
 	return driver;
+}
+
+/**
+ * Refuses a host's `Driver` the sqlite adapter cannot run on: one of another dialect,
+ * and one without the sync tier or `savepoint()` a unit runs on (a sqlkit older than
+ * 0.3.0 built no `savepoint()`).
+ *
+ * @throws {TypeError}
+ */
+export function assertSqliteDriver(db: Driver): void {
+	if (db.dialect !== "sqlite") {
+		throw new TypeError(
+			`The sqlite adapter runs on SQLite: got a "${db.dialect}" driver (${db.adapter})`,
+		);
+	}
+	const missing =
+		typeof db.sync !== "object" || db.sync === null
+			? "no sync tier"
+			: typeof db.savepoint !== "function"
+				? "no savepoint()"
+				: undefined;
+	if (missing) {
+		throw new TypeError(
+			`The sqlite adapter needs a Driver with a sync tier and savepoint(), from @marianmeres/sqlkit 0.3.0 or newer: this one has ${missing}`,
+		);
+	}
 }

@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { openSqlite } from "@marianmeres/sqlkit/sqlite";
 import type pg from "pg";
 import type { AdapterMemory } from "../src/adapter/memory.ts";
 import type { AdapterPostgres } from "../src/adapter/postgres.ts";
@@ -22,6 +23,8 @@ export function testsRunner(
 				pglite: AdapterPostgres;
 				redis: AdapterRedis;
 				sqlite: AdapterSqlite;
+				/** The sqlite adapter again, on a sqlkit `Driver` from `openSqlite()`. */
+				sqliteDriver: AdapterSqlite;
 			};
 		}) => void | Promise<void>;
 		only?: boolean;
@@ -60,6 +63,8 @@ export function testsRunner(
 						}
 
 						const dbSqlite = createSqlite();
+						// a fresh in-memory database of its own, behind a sqlkit Driver
+						const dbSqliteDriver = openSqlite();
 
 						const ns = "app:";
 
@@ -71,6 +76,9 @@ export function testsRunner(
 							}),
 							redis: createKVClient(ns, "redis", { db: dbRedis }),
 							sqlite: createKVClient(ns, "sqlite", { db: dbSqlite }),
+							sqliteDriver: createKVClient(ns, "sqlite", {
+								db: dbSqliteDriver,
+							}),
 						};
 
 						for (const client of Object.values(clients)) {
@@ -87,6 +95,7 @@ export function testsRunner(
 							await dbPg?.end();
 							await dbRedis?.destroy();
 							dbSqlite.close();
+							await dbSqliteDriver.close();
 						}
 					},
 		);
