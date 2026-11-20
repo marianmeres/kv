@@ -95,12 +95,14 @@ dist/                   — `tsc -p tsconfig.build.json` output; gitignored; the
 23. The SQLite adapter takes only a `DatabaseSync`: its constructor refuses a sqlkit
     `Driver` with a `TypeError`.
 24. A sqlkit minor is a kv minor. sqlkit is on `0.x`, so each minor is a caret range of
-    its own: a consumer whose own sqlkit is on another minor gets two copies, and
-    `SqlError` is a plain class, so their `instanceof SqlError` misses the errors of the
-    driver kv built. Moving kv's range across a sqlkit minor therefore takes, together:
-    `engines.node` to sqlkit's, the README's "Requires Node" and the `^0.x.0` in its
-    notes and in `API.md`, and a "Changes in" section in the README telling consumers
-    to move their own sqlkit.
+    its own: a consumer whose own sqlkit is on another minor gets two copies. Since 0.3.0
+    two copies know each other's `SqlError` (a mark `instanceof` reads; a copy of 0.2.0
+    or older has none, so its `instanceof SqlError` misses the errors of the driver kv
+    built). A minor can still change the `Driver` type the PostgreSQL adapter takes, as
+    0.3.0 did with `savepoint`. Moving kv's range across a sqlkit minor therefore takes,
+    together: `engines.node` to sqlkit's, the README's "Requires Node" and the `^0.x.0`
+    in its notes and in `API.md`, and a "Changes in" section in the README telling
+    consumers to move their own sqlkit.
 
 ## Before Making Changes
 

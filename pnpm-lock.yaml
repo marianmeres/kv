@@ -170,8 +170,8 @@ importers:
         specifier: ^3.23.1
         version: 3.23.1
       '@marianmeres/sqlkit':
-        specifier: ^0.2.0
-        version: 0.2.0
+        specifier: ^0.3.1
+        version: 0.3.1
       redis:
         specifier: ^6.3.1
         version: 6.3.1
@@ -287,8 +287,8 @@ packages:
   '@marianmeres/semver@1.0.1':
     resolution: {integrity: sha512-dzFgO+1AnFwW6OeEqSjSi/vZ571mgo0BnTGmtAAw7Nm/rJ0mrGV0Za5aPxezycZKUlVTdKgoZbn78e/zz/7J5A==}
 
-  '@marianmeres/sqlkit@0.2.0':
-    resolution: {integrity: sha512-jlE0VU87E9p24vAX/on2KEXc5AAx/Yqu7gNeiKdW0R5KhJBk/HOkdQWnkg92kwcQ8Zasc4kPB8uFHOBJe2y6SA==}
+  '@marianmeres/sqlkit@0.3.1':
+    resolution: {integrity: sha512-sN+1mTJ9TLUOPMD9/tluFwNUndKv23ZvnvWAqNE6dhr5BriAYo5XTTvQnVeWDh26e03webIpDG2FdnAmIy81RQ==}
     engines: {node: ^24.20.0 || >=26.6.0}
 
   '@redis/bloom@6.3.1':
@@ -586,7 +586,7 @@ snapshots:
 
   '@marianmeres/semver@1.0.1': {}
 
-  '@marianmeres/sqlkit@0.2.0':
+  '@marianmeres/sqlkit@0.3.1':
     dependencies:
       '@marianmeres/migrate': 2.0.0
 

@@ -9,14 +9,14 @@ repository, so a row that needs more than one line has its detail below the tabl
 
 **Status:** ⬜ open · ⏭️ deferred until its trigger · ✅ done
 
-| Status | ID  | Rank | Task                                                                                                                                                                                                                            |
-| ------ | --- | ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| ⬜     | T07 | 1    | The SQLite adapter onto sqlkit: `db` takes a `DatabaseSync` or a `Driver`, one code path. Needs its own plan, and T12 first. Its trigger is met: sqlkit has savepoints since 0.3.0 (and keeps prepared statements since 0.2.0). |
-| ⬜     | T08 | 2    | CI's PostgreSQL image from `postgres:17` to `postgres:18` in `.github/workflows/ci.yml`, the major of the local and production databases. A change of its own.                                                                  |
-| ⬜     | T09 | 3    | PGlite as a tested target: a dev dependency and its cases in `tests/driver.test.ts`. Ready once someone wants kv on PGlite.                                                                                                     |
-| ⬜     | T10 | 4    | `redis` out of `dependencies`: `src/` imports it for types only. Needs a structural type for the client.                                                                                                                        |
-| ⏭️     | T11 | 5    | The PostgreSQL statements as sqlkit `sql` fragments. Trigger: a statement that has to be composed from parts, or the two SQL adapters sharing statement code.                                                                   |
-| ⬜     | T12 | 6    | sqlkit from `^0.2.0` to `^0.3.0`: a sqlkit minor, so a kv minor. From 0.3.0 a `SqlError` is recognized across copies of sqlkit, which changes the "same minor" advice in the docs. T07 needs it first.                          |
+| Status | ID  | Rank | Task                                                                                                                                                                                                                                     |
+| ------ | --- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ⬜     | T07 | 1    | The SQLite adapter onto sqlkit: `db` takes a `DatabaseSync` or a `Driver`, one code path. Needs its own plan. Its trigger is met: sqlkit has savepoints since 0.3.0 (and keeps prepared statements since 0.2.0), and kv is on 0.3 (T12). |
+| ⬜     | T08 | 2    | CI's PostgreSQL image from `postgres:17` to `postgres:18` in `.github/workflows/ci.yml`, the major of the local and production databases. A change of its own.                                                                           |
+| ⬜     | T09 | 3    | PGlite as a tested target: a dev dependency and its cases in `tests/driver.test.ts`. Ready once someone wants kv on PGlite.                                                                                                              |
+| ⬜     | T10 | 4    | `redis` out of `dependencies`: `src/` imports it for types only. Needs a structural type for the client.                                                                                                                                 |
+| ⏭️     | T11 | 5    | The PostgreSQL statements as sqlkit `sql` fragments. Trigger: a statement that has to be composed from parts, or the two SQL adapters sharing statement code.                                                                            |
+| ✅     | T12 | 6    | sqlkit to `^0.3.1`, in 4.1.0. From 0.3.0 a `SqlError` is recognized across copies of sqlkit, so the docs no longer ask an app to stay on the minor kv installs.                                                                          |
 
 ## T07: the SQLite adapter onto sqlkit
 
@@ -91,7 +91,7 @@ So the order that leaves no regression:
 1. kv's PostgreSQL adapter moves onto sqlkit. Done in 4.0.0.
 2. sqlkit gets its statement cache (done in sqlkit 0.2.0) and savepoints (done in sqlkit
    0.3.0).
-3. kv moves to sqlkit `^0.3.0` (T12).
+3. kv moves to sqlkit 0.3 (T12). Done in 4.1.0.
 4. kv's SQLite adapter ports: `db` accepts a `DatabaseSync` or a `Driver`, and there is
    one code path. kv's SQLite tests, the joined transaction among them, are the case
    that proves it.
@@ -138,24 +138,25 @@ first-class form, so a rewrite would change verified statements for style alone.
 when a statement has to be composed from parts, or when the two SQL adapters come to
 share statement code.
 
-## T12: sqlkit to `^0.3.0`
+## T12: sqlkit to 0.3
 
-kv depends on `@marianmeres/sqlkit` `^0.2.0`. sqlkit 0.3.0 came out on 2026-11-20, and a
-sqlkit minor is a kv minor (AGENTS.md, rule 24). What it brings kv:
+Done on 2026-11-20: kv depends on `@marianmeres/sqlkit` `^0.3.1`. It goes out in 4.1.0,
+which had moved to `^0.2.0` and was not published yet, so consumers move once, from the
+`^0.1.1` of 4.0.0. A sqlkit minor is a kv minor (AGENTS.md, rule 24). What it brought kv:
 
 - **`SqlError` recognized across copies of sqlkit.** From 0.3.0 every `SqlError` carries
   a mark that `instanceof` reads: an error one copy built is an instance of another
   copy's classes, and its `withRetry` retries it. A copy of 0.2.0 or older carries no
-  mark. So with kv on `^0.3.0`, an app's `instanceof SqlError` holds when its own sqlkit
-  is 0.3.0 or newer, on whatever minor. The advice to stay on the minor kv installs
-  (README, API.md) and the reason rule 24 gives change with it. Checked on the published
-  packages: 0.3.0 and 0.3.1 installed as two copies know each other's errors, and
-  neither knows an error from 0.2.0.
+  mark. So an app's `instanceof SqlError` holds when its own sqlkit is 0.3.0 or newer, on
+  whatever minor. The advice to stay on the minor kv installs (README, API.md) and the
+  reason rule 24 gives changed with it. Checked on the published packages: 0.3.0 and
+  0.3.1 installed as two copies know each other's errors, and neither knows an error from
+  0.2.0.
 - **Savepoints**, which T07 needs.
 
-What it asks of kv: `Driver` has a new required method, `savepoint`. A `Driver` an app
-built with sqlkit 0.2 no longer fits the type the PostgreSQL adapter takes, so an app
-with its own sqlkit moves it to `^0.3.0` together with kv, as it did for 0.2. The
-adapter itself needs no change: it calls neither `savepoint` nor sqlkit's migrations,
-whose steps 0.3.0 runs differently. The Node floor does not move: 0.3's `engines` are
+What it asked of kv: nothing in `src/`. `Driver` has a new required method, `savepoint`,
+so a `Driver` an app built with sqlkit 0.2 no longer fits the type the PostgreSQL adapter
+takes (checked: TypeScript refuses it), and an app with its own sqlkit moves it to
+`^0.3.0` together with kv. The adapter calls neither `savepoint` nor sqlkit's migrations,
+whose steps 0.3.0 runs differently. The Node floor did not move: 0.3's `engines` are
 0.2's.
