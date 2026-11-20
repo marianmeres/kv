@@ -1,12 +1,20 @@
 /**
  * @module
  *
- * SQLite key-value storage adapter implementation (`node:sqlite`).
+ * SQLite key-value storage adapter implementation (`node:sqlite`, through a sqlkit
+ * driver: kv's own over a handle, or the host's).
  */
 
-import type { DatabaseSync, StatementSync } from "node:sqlite";
+import type { DatabaseSync } from "node:sqlite";
 import { createClog } from "@marianmeres/clog";
+import type { Driver, QueryResult, Row, SyncDriver } from "@marianmeres/sqlkit";
 import { isDriver } from "../utils/driver.ts";
+import {
+	assertSqliteDriver,
+	isDatabaseSync,
+	ownSqliteDriver,
+	type SqliteDb,
+} from "../utils/sqlite-driver.ts";
 import {
 	AdapterAbstract,
 	type AdapterAbstractOptions,
@@ -21,10 +29,12 @@ import {
  */
 export interface AdapterSqliteOptions extends AdapterAbstractOptions {
 	/**
-	 * An open `node:sqlite` database, e.g. `new DatabaseSync("kv.db")`. The caller owns
-	 * it: `destroy()` never closes it, so one handle can be shared across adapters.
+	 * The database: an open `node:sqlite` handle, e.g. `new DatabaseSync("kv.db")`, or a
+	 * sqlkit `Driver` of the `sqlite` dialect with a sync tier, e.g. `openSqlite("kv.db")`.
+	 * The caller owns it: `destroy()` never closes it, so one can be shared across
+	 * adapters.
 	 */
-	db: DatabaseSync;
+	db: SqliteDb;
 	/**
 	 * Name of the table to use for storing key-value pairs.
 	 * The table will be created automatically if it doesn't exist.
@@ -46,6 +56,9 @@ const KEYS_ITER_PAGE = 500;
 /** A row is live when it has no expiry or expires after the bound `now` (epoch ms). */
 const LIVE = "(expires_at IS NULL OR expires_at > ?)";
 
+/** One statement as it is sent: its text and its `?` parameters. */
+type Statement = [text: string, params: unknown[]];
+
 /**
  * SQLite key-value storage adapter.
  *
@@ -54,11 +67,20 @@ const LIVE = "(expires_at IS NULL OR expires_at > ?)";
  * and index on initialization.
  *
  * @remarks
+ * - Over a `DatabaseSync`, every statement goes through kv's own sqlkit driver over the
+ *   handle, on its synchronous tier: one driver per handle, imported on first use. A
+ *   statement runs inside the call, and nothing else on the handle interleaves.
+ * - Over a sqlkit `Driver` the host passed, a statement takes its turn on the driver's
+ *   async tier: it waits for a transaction the host has open elsewhere, and joins one
+ *   it was issued inside.
  * - `node:sqlite` is synchronous, so every operation blocks the event loop for its
- *   duration (typically microseconds) and nothing else on the handle interleaves.
+ *   duration (typically microseconds).
  * - Multi-statement operations run in `BEGIN IMMEDIATE`, so they stay atomic against
  *   other connections and processes on the same file. Inside a transaction the caller
- *   already opened on the same handle, they use a savepoint instead.
+ *   already opened (on the same handle, or through the same `Driver`), they use a
+ *   savepoint instead.
+ * - A statement SQLite refused rejects with sqlkit's `SqlError`, node:sqlite's error as
+ *   its `cause`.
  *
  * @example
  * ```typescript
@@ -69,6 +91,10 @@ const LIVE = "(expires_at IS NULL OR expires_at > ?)";
  * });
  * await client.initialize();
  * await client.set("session:abc", { userId: 123 }, { ttl: 3600 });
+ *
+ * // or on a sqlkit Driver
+ * import { openSqlite } from "@marianmeres/sqlkit/sqlite";
+ * const onDriver = createKVClient("myapp:", "sqlite", { db: openSqlite("kv.db") });
  * ```
  */
 export class AdapterSqlite extends AdapterAbstract {
@@ -85,8 +111,19 @@ export class AdapterSqlite extends AdapterAbstract {
 
 	#cleanupTimer: ReturnType<typeof setTimeout> | undefined;
 
-	/** Prepared statements by SQL text — a small, fixed set per adapter. */
-	#statements = new Map<string, StatementSync>();
+	/**
+	 * What every statement runs on, set by {@link #open}: kv's own driver over
+	 * `options.db`, or `options.db` itself when it is a `Driver`. Never closed: either
+	 * way that would close what the host owns.
+	 */
+	#driver: Driver | undefined;
+
+	/**
+	 * Whether `options.db` is a host's `Driver` rather than a handle. The one flag that
+	 * decides the path, read in {@link #open}, {@link #q}, {@link #atomic},
+	 * {@link #exec} and the cleanup, and nowhere else.
+	 */
+	readonly #onHostDriver: boolean = false;
 
 	constructor(namespace: string = "", options: Partial<AdapterSqliteOptions> = {}) {
 		super(namespace);
@@ -95,8 +132,11 @@ export class AdapterSqlite extends AdapterAbstract {
 			throw new Error("Missing sqlite database instance");
 		}
 		if (isDriver(this.options.db)) {
+			assertSqliteDriver(this.options.db);
+			this.#onHostDriver = true;
+		} else if (!isDatabaseSync(this.options.db)) {
 			throw new TypeError(
-				"The sqlite adapter takes a node:sqlite DatabaseSync; a sqlkit Driver is not supported yet",
+				"The sqlite adapter takes a node:sqlite DatabaseSync or a sqlkit Driver of the sqlite dialect as db",
 			);
 		}
 		// tableName is spliced into SQL verbatim, so guard against surprises.
@@ -107,13 +147,43 @@ export class AdapterSqlite extends AdapterAbstract {
 		}
 	}
 
-	#stmt(sql: string): StatementSync {
-		let stmt = this.#statements.get(sql);
-		if (!stmt) {
-			stmt = this.options.db.prepare(sql);
-			this.#statements.set(sql, stmt);
-		}
-		return stmt;
+	/**
+	 * The driver: a host's `Driver` as it is, or kv's own over the handle, built (and its
+	 * module imported) on the first call.
+	 */
+	async #open(): Promise<Driver> {
+		this.#driver ??= this.#onHostDriver
+			? (this.options.db as Driver)
+			: await ownSqliteDriver(this.options.db as DatabaseSync);
+		return this.#driver;
+	}
+
+	/**
+	 * kv's own driver's sync tier: a statement runs inside the call. Never on a host's
+	 * `Driver`, outside {@link #atomic}: there it is a `TypeError` whenever the host has a
+	 * transaction open elsewhere.
+	 */
+	get #sync(): SyncDriver {
+		return this.#driver!.sync!;
+	}
+
+	/**
+	 * Run one statement. On a host's `Driver`, on its async tier: it waits its turn, and
+	 * joins the host's transaction when the call was issued inside it. On kv's own
+	 * driver, on the sync tier: it has run when this returns.
+	 */
+	#q<T = Row>(
+		text: string,
+		params: unknown[],
+	): QueryResult<T> | Promise<QueryResult<T>> {
+		if (this.#onHostDriver) return this.#driver!.query<T>(text, params);
+		return this.#sync.query<T>(text, params);
+	}
+
+	/** Run a script: the DDL of `initialize()` and `destroy(true)`. */
+	#exec(script: string): void | Promise<void> {
+		if (this.#onHostDriver) return this.#driver!.exec(script);
+		this.#sync.exec(script);
 	}
 
 	#expiresAt(ttl: number | undefined): number | null {
@@ -121,31 +191,42 @@ export class AdapterSqlite extends AdapterAbstract {
 	}
 
 	/**
-	 * Runs `fn` as one unit: `BEGIN IMMEDIATE` takes the write lock up front, so no other
-	 * connection can write between its statements. Inside a transaction the caller opened
-	 * on this handle, a savepoint keeps `fn` all-or-nothing without committing theirs.
-	 * `fn` must stay synchronous — an `await` inside would let other work join the
-	 * transaction.
+	 * Runs `fn` as one unit: the driver's `sync.savepoint()`, which outside a transaction
+	 * is `BEGIN IMMEDIATE` … `COMMIT`, so no other connection can write between its
+	 * statements. `fn` must stay synchronous (an `await` inside would let other work join
+	 * the transaction), and there is no `await` here either: the unit is over when the
+	 * call returns.
+	 *
+	 * On a host's `Driver`, the same `fn` runs inside the driver's async `savepoint()`,
+	 * on its sync tier (sqlkit's rule S3): the unit waits its turn, is a savepoint of the
+	 * host's transaction when it was issued inside one, and runs without a break.
 	 */
-	#atomic<T>(fn: () => T): T {
-		const { db, logger } = this.options;
-		const [begin, commit, rollback] = db.isTransaction
-			? ["SAVEPOINT kv_atomic", "RELEASE kv_atomic", "ROLLBACK TO kv_atomic"]
-			: ["BEGIN IMMEDIATE", "COMMIT", "ROLLBACK"];
-
-		db.exec(begin);
+	async #atomic<T>(fn: (tx: SyncDriver) => T): Promise<T> {
+		if (this.#onHostDriver) {
+			const driver = this.#driver!;
+			return driver.savepoint(async () => fn(driver.sync!));
+		}
+		const sync = this.#sync;
+		const handle = this.options.db as DatabaseSync;
+		// No transaction of the caller's: the driver's own. (A closed handle goes this way
+		// too: `isTransaction` would throw, the driver answers with a `SqlError`.)
+		if (!handle.isOpen || !handle.isTransaction) return sync.savepoint(fn);
+		// The caller's BEGIN on the handle. The driver does not know that transaction and
+		// SQLite refuses a second one, so the savepoint goes to the handle and the unit's
+		// statements through the driver.
+		handle.exec("SAVEPOINT kv_atomic");
 		try {
-			const result = fn();
-			db.exec(commit);
+			const result = fn(sync);
+			handle.exec("RELEASE kv_atomic");
 			return result;
 		} catch (err) {
 			try {
-				db.exec(rollback);
+				handle.exec("ROLLBACK TO kv_atomic");
 				// a savepoint survives ROLLBACK TO; release it to leave the caller's
 				// transaction exactly as it was
-				if (begin.startsWith("SAVEPOINT")) db.exec(commit);
+				handle.exec("RELEASE kv_atomic");
 			} catch (rollbackErr) {
-				logger?.error?.(`Rollback failed: ${rollbackErr}`);
+				this.options.logger?.error?.(`Rollback failed: ${rollbackErr}`);
 			}
 			throw err;
 		}
@@ -153,9 +234,10 @@ export class AdapterSqlite extends AdapterAbstract {
 
 	/** @inheritdoc */
 	override async initialize(): Promise<void> {
-		const { db, tableName } = this.options;
+		const { tableName } = this.options;
+		await this.#open();
 
-		db.exec(`
+		await this.#exec(`
             CREATE TABLE IF NOT EXISTS ${tableName} (
                 key TEXT NOT NULL PRIMARY KEY,
                 value TEXT NOT NULL,
@@ -163,7 +245,7 @@ export class AdapterSqlite extends AdapterAbstract {
             )
         `);
 
-		db.exec(`
+		await this.#exec(`
             CREATE INDEX IF NOT EXISTS idx_${tableName}_expires_at
                 ON ${tableName} (expires_at)
                 WHERE expires_at IS NOT NULL
@@ -175,40 +257,54 @@ export class AdapterSqlite extends AdapterAbstract {
 
 	/** @inheritdoc */
 	override async destroy(hard?: boolean): Promise<void> {
-		// stop the timer first so a pending tick cannot fire during DROP
+		// stop the timer first so a pending tick cannot fire during DROP, and mark the
+		// adapter down before any await
 		clearTimeout(this.#cleanupTimer);
 		this.#cleanupTimer = undefined;
-		this.#statements.clear();
+		this._initialized = false;
 
 		if (hard) {
-			const { db, tableName } = this.options;
-			db.exec(`DROP TABLE IF EXISTS ${tableName}`);
+			// `destroy(true)` may come before `initialize()`: open the driver here too
+			await this.#open();
+			await this.#exec(`DROP TABLE IF EXISTS ${this.options.tableName}`);
 		}
-		this._initialized = false;
 	}
 
-	#maybeTTLCleanup() {
+	async #maybeTTLCleanup() {
 		clearTimeout(this.#cleanupTimer); // safety
 		if (this.options.ttlCleanupIntervalSec) {
 			const { db, tableName, logger } = this.options;
+			const expired = `DELETE FROM ${tableName}
+                    WHERE expires_at IS NOT NULL AND expires_at <= ?`;
 
-			// The caller closed the handle without destroy(). Every later tick would fail
-			// the same way, so say it once and stop.
-			if (!db.isOpen) {
-				logger?.error?.(
-					"TTL cleanup stopped: the database handle was closed before destroy()",
-				);
-				return;
-			}
+			if (this.#onHostDriver) {
+				// The PostgreSQL adapter's tick: the delete waits its turn. A closed driver
+				// cannot be told from another failure but by its message, so every failure
+				// is logged and the tick goes on.
+				try {
+					await this.#q(expired, [Date.now()]);
+				} catch (err) {
+					logger?.error?.(`TTL cleanup error: ${err}`);
+				}
 
-			// do the cleanup now
-			try {
-				this.#stmt(
-					`DELETE FROM ${tableName}
-                    WHERE expires_at IS NOT NULL AND expires_at <= ?`,
-				).run(Date.now());
-			} catch (err) {
-				logger?.error?.(`TTL cleanup error: ${err}`);
+				// destroy() ran while the delete was waiting or running
+				if (!this._initialized) return;
+			} else {
+				// The caller closed the handle without destroy(). Every later tick would
+				// fail the same way, so say it once and stop.
+				if (!(db as DatabaseSync).isOpen) {
+					logger?.error?.(
+						"TTL cleanup stopped: the database handle was closed before destroy()",
+					);
+					return;
+				}
+
+				// do the cleanup now
+				try {
+					this.#q(expired, [Date.now()]);
+				} catch (err) {
+					logger?.error?.(`TTL cleanup error: ${err}`);
+				}
 			}
 
 			// schedule next...
@@ -245,14 +341,16 @@ export class AdapterSqlite extends AdapterAbstract {
                 expires_at = excluded.expires_at`;
 	}
 
-	#set(key: string, value: any, options: Partial<SetOptions> = {}): boolean {
-		this._assertInitialized();
-		this.#stmt(this.#upsertSql()).run(
-			this._withNs(key),
-			JSON.stringify(value ?? null),
-			this.#expiresAt(this._resolveTtl(options)),
-		);
-		return true;
+	/** The upsert `set()` sends, shared with the units. Validates the key. */
+	#setStatement(key: string, value: any, options: Partial<SetOptions> = {}): Statement {
+		return [
+			this.#upsertSql(),
+			[
+				this._withNs(key),
+				JSON.stringify(value ?? null),
+				this.#expiresAt(this._resolveTtl(options)),
+			],
+		];
 	}
 
 	/** @inheritdoc */
@@ -261,7 +359,9 @@ export class AdapterSqlite extends AdapterAbstract {
 		value: any,
 		options: Partial<SetOptions> = {},
 	): Promise<boolean> {
-		return this.#set(key, value, options);
+		this._assertInitialized();
+		await this.#q(...this.#setStatement(key, value, options));
+		return true;
 	}
 
 	/** @inheritdoc */
@@ -275,16 +375,17 @@ export class AdapterSqlite extends AdapterAbstract {
 
 		// INSERT on new keys; UPDATE only when the existing row is expired.
 		// (Live keys stay untouched — the hallmark of setIfAbsent.)
-		const { changes } = this.#stmt(
+		const { rowCount } = await this.#q(
 			`${this.#upsertSql()}
             WHERE expires_at IS NOT NULL AND expires_at <= ?`,
-		).run(
-			nsKey,
-			JSON.stringify(value ?? null),
-			this.#expiresAt(this._resolveTtl(options)),
-			Date.now(),
+			[
+				nsKey,
+				JSON.stringify(value ?? null),
+				this.#expiresAt(this._resolveTtl(options)),
+				Date.now(),
+			],
 		);
-		return Number(changes) > 0;
+		return rowCount > 0;
 	}
 
 	/** @inheritdoc */
@@ -294,32 +395,39 @@ export class AdapterSqlite extends AdapterAbstract {
 		options: Partial<SetOptions> = {},
 	): Promise<any> {
 		this._assertInitialized();
-		return this.#atomic(() => {
-			const previous = this.#get(key);
-			this.#set(key, value, options);
+		return this.#atomic((tx) => {
+			const previous = this.#valueOf(
+				tx.query<{ value: string }>(...this.#getStatement(key)).rows,
+			);
+			tx.query(...this.#setStatement(key, value, options));
 			return previous;
 		});
 	}
 
-	#incrBy(key: string, delta: number, options: Partial<SetOptions> = {}): number {
+	#incrBy(
+		key: string,
+		delta: number,
+		options: Partial<SetOptions> = {},
+	): Promise<number> {
 		this._assertInitialized();
 		const nsKey = this._withNs(key);
 		const { tableName } = this.options;
 
 		// Read-modify-write in JS, so the arithmetic is exactly the memory adapter's.
-		return this.#atomic(() => {
-			const row = this.#stmt(
+		return this.#atomic((tx) => {
+			const [row] = tx.query<{ value: string }>(
 				`SELECT value FROM ${tableName} WHERE key = ? AND ${LIVE}`,
-			).get(nsKey, Date.now()) as { value: string } | undefined;
+				[nsKey, Date.now()],
+			).rows;
 
 			// - New key OR expired key: value = delta, expires_at = $ttl
 			// - Live key: value = old + delta, preserve existing expires_at
 			if (!row) {
-				this.#stmt(this.#upsertSql()).run(
+				tx.query(this.#upsertSql(), [
 					nsKey,
 					JSON.stringify(delta),
 					this.#expiresAt(this._resolveTtl(options)),
-				);
+				]);
 				return delta;
 			}
 
@@ -328,10 +436,10 @@ export class AdapterSqlite extends AdapterAbstract {
 				throw new TypeError("KV value is not a number");
 			}
 			const next = current + delta;
-			this.#stmt(`UPDATE ${tableName} SET value = ? WHERE key = ?`).run(
+			tx.query(`UPDATE ${tableName} SET value = ? WHERE key = ?`, [
 				JSON.stringify(next),
 				nsKey,
-			);
+			]);
 			return next;
 		});
 	}
@@ -372,58 +480,70 @@ export class AdapterSqlite extends AdapterAbstract {
 		if (hasTtl) params.push(this.#expiresAt(this._resolveTtl(options)));
 		params.push(nsKey, JSON.stringify(expected ?? null), Date.now());
 
-		const { changes } = this.#stmt(
+		const { rowCount } = await this.#q(
 			`UPDATE ${tableName}
             SET value = ?${hasTtl ? ", expires_at = ?" : ""}
             WHERE key = ? AND value = ? AND ${LIVE}`,
-		).run(...params);
-		return Number(changes) > 0;
+			params,
+		);
+		return rowCount > 0;
 	}
 
-	#get(key: string): any {
-		this._assertInitialized();
-		const row = this.#stmt(
+	/** The read `get()` sends, shared with the units. Validates the key. */
+	#getStatement(key: string): Statement {
+		return [
 			`SELECT value FROM ${this.options.tableName} WHERE key = ? AND ${LIVE}`,
-		).get(this._withNs(key), Date.now()) as { value: string } | undefined;
+			[this._withNs(key), Date.now()],
+		];
+	}
 
+	/** The value a {@link #getStatement} read: `null` when it found no live row. */
+	#valueOf(rows: { value: string }[]): any {
+		const [row] = rows;
 		return row ? JSON.parse(row.value) : null;
 	}
 
 	/** @inheritdoc */
 	override async get(key: string): Promise<any> {
-		return this.#get(key);
+		this._assertInitialized();
+		const { rows } = await this.#q<{ value: string }>(...this.#getStatement(key));
+		return this.#valueOf(rows);
 	}
 
-	#delete(key: string): boolean {
-		this._assertInitialized();
-		const { changes } = this.#stmt(
+	/** The delete `delete()` sends, shared with the units. Validates the key. */
+	#deleteStatement(key: string): Statement {
+		return [
 			`DELETE FROM ${this.options.tableName} WHERE key = ?`,
-		).run(this._withNs(key));
-		return Number(changes) > 0;
+			[this._withNs(key)],
+		];
 	}
 
 	/** @inheritdoc */
 	override async delete(key: string): Promise<boolean> {
-		return this.#delete(key);
+		this._assertInitialized();
+		const { rowCount } = await this.#q(...this.#deleteStatement(key));
+		return rowCount > 0;
 	}
 
 	/** @inheritdoc */
 	override async exists(key: string): Promise<boolean> {
 		this._assertInitialized();
-		const row = this.#stmt(
+		const { rowCount } = await this.#q(
 			`SELECT 1 FROM ${this.options.tableName} WHERE key = ? AND ${LIVE}`,
-		).get(this._withNs(key), Date.now());
-		return row !== undefined;
+			[this._withNs(key), Date.now()],
+		);
+		return rowCount > 0;
 	}
 
 	/** @inheritdoc */
 	override async keys(pattern: string): Promise<string[]> {
 		this._assertInitialized();
-		const rows = this.#stmt(
+		const { rows } = await this.#q<{ key: string }>(
 			`SELECT key FROM ${this.options.tableName}
             WHERE key GLOB ? AND ${LIVE}
             ORDER BY key`,
-		).all(this.#withNsGlob(pattern), Date.now()) as { key: string }[];
+			[this.#withNsGlob(pattern), Date.now()],
+		);
 		return rows.map((row) => this._withoutNs(row.key)).toSorted();
 	}
 
@@ -438,19 +558,19 @@ export class AdapterSqlite extends AdapterAbstract {
 		// leaves nothing to release.
 		let after: string | undefined;
 		while (true) {
-			const rows = (
-				after === undefined
-					? this.#stmt(
-							`SELECT key FROM ${tableName}
+			const { rows } = await (after === undefined
+				? this.#q<{ key: string }>(
+						`SELECT key FROM ${tableName}
                         WHERE key GLOB ? AND ${LIVE}
                         ORDER BY key LIMIT ${KEYS_ITER_PAGE}`,
-						).all(glob, Date.now())
-					: this.#stmt(
-							`SELECT key FROM ${tableName}
+						[glob, Date.now()],
+					)
+				: this.#q<{ key: string }>(
+						`SELECT key FROM ${tableName}
                         WHERE key GLOB ? AND key > ? AND ${LIVE}
                         ORDER BY key LIMIT ${KEYS_ITER_PAGE}`,
-						).all(glob, after, Date.now())
-			) as { key: string }[];
+						[glob, after, Date.now()],
+					));
 
 			for (const row of rows) {
 				yield this._withoutNs(row.key);
@@ -467,17 +587,19 @@ export class AdapterSqlite extends AdapterAbstract {
 		const glob = this.#withNsGlob(pattern);
 		const now = Date.now();
 
-		return this.#atomic(() => {
-			const { changes } = this.#stmt(
+		return this.#atomic((tx) => {
+			const { rowCount } = tx.query(
 				`DELETE FROM ${tableName} WHERE key GLOB ? AND ${LIVE}`,
-			).run(glob, now);
+				[glob, now],
+			);
 			// expired rows under the pattern are already invisible; drop them too, but
 			// don't count them
-			this.#stmt(
+			tx.query(
 				`DELETE FROM ${tableName}
                 WHERE key GLOB ? AND expires_at IS NOT NULL AND expires_at <= ?`,
-			).run(glob, now);
-			return Number(changes);
+				[glob, now],
+			);
+			return rowCount;
 		});
 	}
 
@@ -498,9 +620,9 @@ export class AdapterSqlite extends AdapterAbstract {
 		]);
 
 		// one transaction: all-or-nothing, and a single commit instead of one per row
-		this.#atomic(() => {
-			const upsert = this.#stmt(this.#upsertSql());
-			for (const params of rows) upsert.run(...params);
+		await this.#atomic((tx) => {
+			const upsert = this.#upsertSql();
+			for (const params of rows) tx.query(upsert, params);
 		});
 
 		return rows.map(() => true);
@@ -514,13 +636,11 @@ export class AdapterSqlite extends AdapterAbstract {
 
 		// one JSON-array parameter instead of N placeholders: no bound-variable limit,
 		// and a single cached statement for every batch size
-		const rows = this.#stmt(
+		const { rows } = await this.#q<{ key: string; value: string }>(
 			`SELECT key, value FROM ${this.options.tableName}
             WHERE key IN (SELECT j.value FROM json_each(?) AS j) AND ${LIVE}`,
-		).all(JSON.stringify(keys.map((k) => this._withNs(k))), Date.now()) as {
-			key: string;
-			value: string;
-		}[];
+			[JSON.stringify(keys.map((k) => this._withNs(k))), Date.now()],
+		);
 
 		const found: Record<string, any> = Object.create(null);
 		for (const row of rows) {
@@ -539,20 +659,24 @@ export class AdapterSqlite extends AdapterAbstract {
 	/** @inheritdoc */
 	override async expire(key: string, ttl: number): Promise<boolean> {
 		this._assertInitialized();
-		const { changes } = this.#stmt(
+		const { rowCount } = await this.#q(
 			`UPDATE ${this.options.tableName}
             SET expires_at = ?
             WHERE key = ? AND ${LIVE}`,
-		).run(Math.round(Date.now() + ttl * 1000), this._withNs(key), Date.now());
-		return Number(changes) > 0;
+			[Math.round(Date.now() + ttl * 1000), this._withNs(key), Date.now()],
+		);
+		return rowCount > 0;
 	}
 
 	/** @inheritdoc */
 	override async ttl(key: string): Promise<TtlResult> {
 		this._assertInitialized();
-		const row = this.#stmt(
-			`SELECT expires_at FROM ${this.options.tableName} WHERE key = ?`,
-		).get(this._withNs(key)) as { expires_at: number | bigint | null } | undefined;
+		const [row] = (
+			await this.#q<{ expires_at: number | bigint | null }>(
+				`SELECT expires_at FROM ${this.options.tableName} WHERE key = ?`,
+				[this._withNs(key)],
+			)
+		).rows;
 
 		if (!row) return { state: "missing" };
 		if (row.expires_at === null) return { state: "no-ttl" };
@@ -566,18 +690,28 @@ export class AdapterSqlite extends AdapterAbstract {
 	/** @inheritdoc */
 	override async transaction(operations: Operation[]): Promise<any[]> {
 		this._assertInitialized();
-		return this.#atomic(() => {
+		return this.#atomic((tx) => {
 			const results: any[] = [];
 			for (const op of operations) {
 				switch (op.type) {
 					case "set":
-						results.push(this.#set(op.key, op.value, op.options || {}));
+						tx.query(
+							...this.#setStatement(op.key, op.value, op.options || {}),
+						);
+						results.push(true);
 						break;
 					case "get":
-						results.push(this.#get(op.key));
+						results.push(
+							this.#valueOf(
+								tx.query<{ value: string }>(...this.#getStatement(op.key))
+									.rows,
+							),
+						);
 						break;
 					case "delete":
-						results.push(this.#delete(op.key));
+						results.push(
+							tx.query(...this.#deleteStatement(op.key)).rowCount > 0,
+						);
 						break;
 				}
 			}
@@ -589,13 +723,14 @@ export class AdapterSqlite extends AdapterAbstract {
 		Record<string, { value: any; ttl: Date | null }>
 	> {
 		this._assertInitialized();
-		const rows = this.#stmt(
-			`SELECT key, value, expires_at FROM ${this.options.tableName} WHERE key GLOB ?`,
-		).all(this.#withNsGlob("*")) as {
+		const { rows } = await this.#q<{
 			key: string;
 			value: string;
 			expires_at: number | bigint | null;
-		}[];
+		}>(
+			`SELECT key, value, expires_at FROM ${this.options.tableName} WHERE key GLOB ?`,
+			[this.#withNsGlob("*")],
+		);
 
 		return rows.reduce<Record<string, { value: unknown; ttl: Date | null }>>(
 			(m, row) => {

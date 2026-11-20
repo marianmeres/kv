@@ -75,6 +75,9 @@ const shared = createKVClient("myapp:", "postgres", { db: createPgDriver(pool) }
 import { DatabaseSync } from "node:sqlite";
 const sqlite = createKVClient("myapp:", "sqlite", { db: new DatabaseSync("kv.db") });
 await sqlite.initialize();
+// ...or on a sqlkit Driver over SQLite
+import { openSqlite } from "@marianmeres/sqlkit/sqlite";
+const onDriver = createKVClient("myapp:", "sqlite", { db: openSqlite("kv.db") });
 ```
 
 ---
@@ -94,6 +97,9 @@ initialize(): Promise<void>
 ```
 
 Must be called before any other operations. For some adapters (like memory), this is a no-op, but should always be called for consistency.
+
+Await it: the SQL adapters create their table after an `await`. On the sqlite adapter
+over a `DatabaseSync`, the first call imports sqlkit's SQLite driver.
 
 **Throws:** `Error` - If connection fails.
 
@@ -226,7 +232,7 @@ decr(key: string, by?: number, options?: Partial<SetOptions>): Promise<number>
 
 **Returns:** the new value after the operation.
 
-**Errors:** throws `TypeError("KV value is not a number")` when the stored value is not a JSON number.
+**Errors:** throws `TypeError("KV value is not a number")` when the stored value is not a JSON number. On the SQL adapters that fails nothing in the database: a transaction you opened on the same `Driver` goes on.
 
 **Example:**
 
@@ -600,7 +606,7 @@ Atomicity per adapter:
 | Memory     |   ✓    | Single-threaded by nature                                                                                                                          |
 | Redis      |   ✓    | Uses `MULTI`/`EXEC`                                                                                                                                |
 | PostgreSQL |   ✓    | One connection for the whole unit: pinned on a `pg.Pool`, in turn on one `pg.Client`; a savepoint inside a transaction opened on the same `Driver` |
-| SQLite     |   ✓    | `BEGIN IMMEDIATE`; a savepoint inside a caller-opened transaction                                                                                  |
+| SQLite     |   ✓    | `BEGIN IMMEDIATE`; a savepoint inside a transaction you opened on the same handle or `Driver`                                                      |
 
 Per-operation `options.ttl` is honored by **all** adapters (Redis, PostgreSQL, SQLite, Memory).
 
@@ -739,6 +745,28 @@ a `pg.Client` fit them as they are. See [`AdapterPostgresOptions`](#adapterpostg
 
 ---
 
+### `SqliteDb`
+
+What the sqlite adapter's `db` option takes.
+
+```typescript
+import type { DatabaseSync } from "node:sqlite";
+import type { Driver } from "@marianmeres/sqlkit";
+
+type SqliteDb = DatabaseSync | Driver;
+```
+
+- `DatabaseSync` — an open `node:sqlite` handle, e.g. `new DatabaseSync("kv.db")`.
+- `Driver` — a sqlkit driver of the `sqlite` dialect with a sync tier and `savepoint()`,
+  e.g. `openSqlite("kv.db")` or `createSqliteDriver(handle)` from
+  `@marianmeres/sqlkit/sqlite`.
+
+kv imports `DatabaseSync` as a type only: the package root loads no `node:sqlite`, and the
+adapter imports sqlkit's SQLite driver only when `db` is a `DatabaseSync`. See
+[`AdapterSqliteOptions`](#adaptersqliteoptions).
+
+---
+
 ## Adapter-Specific Options
 
 ### `AdapterMemoryOptions`
@@ -852,10 +880,13 @@ process, so calls take turns there as on one `pg.Client`. For that your app depe
 **Errors:** a statement the database refused rejects with sqlkit's `SqlError` (exported
 by `@marianmeres/sqlkit`), unwrapped and untranslated. Its `code` is Postgres's SQLSTATE
 (e.g. `22P05`), its message is Postgres's, and its `cause` is the driver library's own
-error (node-postgres's, on a pool or a client). The one database error the adapter reads
-is a non-numeric `incr`/`decr` target (`22P02`), which it turns into
-`TypeError("KV value is not a number")`, as every adapter does. kv's own `TypeError` and
-`RangeError`, for an invalid key or namespace, are unchanged.
+error (node-postgres's, on a pool or a client). An `incr`/`decr` on a stored value that is
+not a number is no database error: the statement leaves the value as it is and returns no
+row, the adapter answers `TypeError("KV value is not a number")`, as every adapter does,
+and a transaction you opened on the same `Driver` goes on. The one database error the
+adapter reads is `22P02` from that statement, a backstop it answers with the same
+`TypeError`. kv's own `TypeError` and `RangeError`, for an invalid key or namespace, are
+unchanged.
 
 `instanceof SqlError` holds when your app's own `@marianmeres/sqlkit` is 0.3.0 or newer
 (kv installs `^0.3.1`). From 0.3.0 a `SqlError` is recognized across copies of the
@@ -878,10 +909,12 @@ error from a driver the adapter built over your pool or client, and the test is 
 ```typescript
 interface AdapterSqliteOptions extends AdapterAbstractOptions {
 	/**
-	 * An open `node:sqlite` database, e.g. `new DatabaseSync("kv.db")`. The caller owns
-	 * it: `destroy()` never closes it, so one handle can be shared across adapters.
+	 * The database: an open `node:sqlite` handle, e.g. `new DatabaseSync("kv.db")`, or a
+	 * sqlkit `Driver` of the `sqlite` dialect with a sync tier, e.g. `openSqlite("kv.db")`.
+	 * The caller owns it: `destroy()` never closes it, so one can be shared across
+	 * adapters.
 	 */
-	db: DatabaseSync;
+	db: SqliteDb;
 	/**
 	 * Name of the table to use for storing key-value pairs.
 	 * The table will be created automatically if it doesn't exist.
@@ -898,24 +931,69 @@ interface AdapterSqliteOptions extends AdapterAbstractOptions {
 }
 ```
 
-A sqlkit `Driver` (e.g. from `openSqlite()`) is refused at construction with a
-`TypeError`: the adapter takes the `DatabaseSync` itself.
+`db` is a [`SqliteDb`](#sqlitedb): an open `DatabaseSync` as it is, or a
+[`@marianmeres/sqlkit`](https://www.npmjs.com/package/@marianmeres/sqlkit) `Driver` your
+app built. The constructor refuses, with a `TypeError`, anything that is neither, a
+`Driver` of another dialect, and a `Driver` without a sync tier or `savepoint()`.
+`options.db` stays what you passed.
 
-**Connection ownership:** the adapter never opens, closes or reconfigures the handle — it
-sets no pragmas. Call `destroy()` before you close the handle: if the TTL cleanup finds it
-closed, it logs one error and stops. For several processes on one file, open it with a busy
+**On a `DatabaseSync`**, every statement runs on a sqlkit driver the adapter builds over
+the handle, one per handle however many adapters share it, on its synchronous tier: a
+statement has run when the call returns, and so has a multi-statement operation, so
+nothing else on the handle comes between its statements. The first `initialize()` or
+`destroy(true)` imports `@marianmeres/sqlkit/sqlite` for it.
+
+**On a `Driver` you pass**, it has to be of the `sqlite` dialect, with a sync tier and
+`savepoint()`, so from sqlkit 0.3.0 or newer: `openSqlite()` and `createSqliteDriver()`
+from `@marianmeres/sqlkit/sqlite` build one. What holds there:
+
+- **Calls take their turn.** One issued while a transaction you opened on the driver is
+  open, from outside it, waits for it to end and never becomes part of it.
+- **A call issued inside a transaction you opened on the driver joins it**
+  (`driver.transaction(async () => { await kv.set(…) })`), and commits or rolls back with
+  it. Make the call outside your transaction if it must outlive your rollback. A
+  multi-statement operation issued there is a savepoint of your transaction: when it
+  fails, it is undone alone, and your transaction goes on.
+- **kv cannot be called from inside a synchronous transaction of yours**
+  (`driver.sync.transaction(…)`): its methods are async, and the call rejects with a
+  `TypeError`.
+- **A `BEGIN` you send to the handle behind the driver is not a transaction the driver
+  knows.** A single statement runs inside it, and a multi-statement operation rejects
+  with a `SqlError` (`cannot start a transaction within a transaction`). Open your
+  transactions through the driver.
+
+sqlkit's driver for a Durable Object's SQLite storage has the same shape, and is expected
+to work; it is not part of the test suite.
+
+**Connection ownership:** the adapter never opens, closes or reconfigures the handle or
+the driver — it sets no pragmas, and never calls the driver's `close()`, which would close
+the handle under it. Call `destroy()` before you close either: on a `DatabaseSync`, a TTL
+cleanup that finds the handle closed logs one error and stops; on a `Driver`, it logs
+each failed tick until `destroy()`. For several processes on one file, open it with a busy
 timeout (`new DatabaseSync(path, { timeout: 5000 })`) so a locked write waits instead of
-failing, and consider `PRAGMA journal_mode = WAL`.
+failing, and consider `PRAGMA journal_mode = WAL`. `openSqlite()` sets a busy timeout,
+and the WAL journal for a file.
 
 **Atomicity:** `setIfAbsent`, `cas`, `expire` and `set` are single statements.
 `getSet`, `incr`/`decr`, `setMultiple`, `clear` and `transaction` run in `BEGIN IMMEDIATE`,
 which takes the write lock up front, so they stay atomic against other connections and
-processes. Called inside a transaction you opened on the same handle (`db.isTransaction`),
-they use a savepoint instead: their own failure rolls back only themselves, and your
-`COMMIT`/`ROLLBACK` decides the rest.
+processes. Called inside a transaction you opened on the same handle (`db.isTransaction`)
+or through the same `Driver`, they use a savepoint instead: their own failure rolls back
+only themselves, and your `COMMIT`/`ROLLBACK` decides the rest.
 
 **Synchronous driver:** `node:sqlite` blocks the event loop for the duration of each call.
 Every method still returns a Promise, like the other adapters.
+
+**Errors:** a statement SQLite refused rejects with sqlkit's `SqlError` (exported by
+`@marianmeres/sqlkit`), unwrapped and untranslated, as on PostgreSQL. Its class and
+`kind` say what happened: a locked database, for one, is a `BusyError` (`kind` `"busy"`,
+`retryable`). Its `code` is SQLite's result code (`"5"` for busy), its message is
+SQLite's, and its `cause` is node:sqlite's own error, which carries node:sqlite's `code`
+and `errcode`. The adapter catches no database error. A non-numeric `incr`/`decr` target
+is checked in JavaScript and rejects with `TypeError("KV value is not a number")`, as on
+every adapter. kv's own `TypeError` and `RangeError`, for an invalid key or namespace, are
+unchanged. `instanceof SqlError` holds when your app's own `@marianmeres/sqlkit` is 0.3.0
+or newer, as on PostgreSQL.
 
 **Pattern matching** uses SQLite `GLOB`, which is case-sensitive and uses the primary-key
 index for a literal prefix. `[` is escaped, so `keys()` / `clear()` follow the same

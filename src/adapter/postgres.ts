@@ -293,8 +293,10 @@ export class AdapterPostgres extends AdapterAbstract {
 
 		// - New key OR expired key: value = delta, expires_at = $ttl
 		// - Live key: value = old + delta, preserve existing expires_at
-		// The nested cast `value::text::numeric` throws 22P02 when the stored
-		// value is not a JSON number — we translate that to TypeError.
+		// - Live key that is not a JSON number: the WHERE of DO UPDATE skips it,
+		//   so the statement updates nothing and returns no row. It raises nothing,
+		//   so a transaction the host opened on the same Driver is not aborted.
+		// The 22P02 catch is a backstop: a delta PostgreSQL cannot cast as numeric.
 		try {
 			const { rows } = await this.#db.query<{ value: unknown }>(
 				`INSERT INTO ${tableName} (key, value, expires_at, updated_at)
@@ -311,9 +313,12 @@ export class AdapterPostgres extends AdapterAbstract {
                         ELSE ${tableName}.expires_at
                     END,
                     updated_at = NOW()
+                WHERE (${tableName}.expires_at IS NOT NULL AND ${tableName}.expires_at <= NOW())
+                    OR jsonb_typeof(${tableName}.value) = 'number'
                 RETURNING value`,
 				[nsKey, delta, expiresAt],
 			);
+			if (!rows.length) throw new TypeError("KV value is not a number");
 			return Number(rows[0]!.value);
 		} catch (err: any) {
 			if (

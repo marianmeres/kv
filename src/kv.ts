@@ -28,6 +28,7 @@ export { AdapterRedis, type AdapterRedisOptions } from "./adapter/redis.ts";
 export { AdapterSqlite, type AdapterSqliteOptions } from "./adapter/sqlite.ts";
 export type { PostgresDb } from "./utils/driver.ts";
 export { sleep } from "./utils/sleep.ts";
+export type { SqliteDb } from "./utils/sqlite-driver.ts";
 
 /**
  * Type mapping for all supported KV adapter types.
@@ -55,7 +56,9 @@ interface KnownTypes {
  *               - `"redis"` - Redis server (requires `db` option with Redis client)
  *               - `"postgres"` - PostgreSQL database (requires `db` option: a `pg.Pool`, a
  *                 connected `pg.Client`, or a sqlkit `Driver` of the `pg` dialect)
- *               - `"sqlite"` - SQLite database (requires `db` option with a `node:sqlite` `DatabaseSync`)
+ *               - `"sqlite"` - SQLite database (requires `db` option: a `node:sqlite`
+ *                 `DatabaseSync`, or a sqlkit `Driver` of the `sqlite` dialect with a sync
+ *                 tier, e.g. `openSqlite()`'s)
  * @param options - Adapter-specific configuration options.
  *
  * @returns A configured adapter instance. Call `initialize()` before use.
@@ -86,6 +89,11 @@ interface KnownTypes {
  * import { DatabaseSync } from 'node:sqlite';
  * const sqlite = createKVClient("myapp:", "sqlite", { db: new DatabaseSync("kv.db") });
  * await sqlite.initialize();
+ *
+ * // SQLite storage on a sqlkit Driver
+ * import { openSqlite } from '@marianmeres/sqlkit/sqlite';
+ * const onDriver = createKVClient("myapp:", "sqlite", { db: openSqlite("kv.db") });
+ * await onDriver.initialize();
  * ```
  */
 export function createKVClient<T extends keyof KnownTypes>(

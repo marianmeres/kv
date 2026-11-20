@@ -25,16 +25,22 @@ src/
 │   ├── memory.ts       — In-memory adapter
 │   ├── redis.ts        — Redis adapter
 │   ├── postgres.ts     — PostgreSQL adapter
-│   └── sqlite.ts       — SQLite adapter (`node:sqlite`)
+│   └── sqlite.ts       — SQLite adapter (`node:sqlite`, through a sqlkit driver)
 └── utils/
-    ├── driver.ts       — `toPgDriver()`: the postgres adapter's `db` as a sqlkit `Driver`
+    ├── driver.ts       — `toPgDriver()`: the postgres adapter's `db` as a sqlkit `Driver`;
+    │                     `isDriver()`, which the sqlite adapter shares
+    ├── sqlite-driver.ts — `ownSqliteDriver()`: the sqlite adapter's handle as kv's own
+    │                     sqlkit `Driver`, its module imported lazily; `SqliteDb`, and
+    │                     `assertSqliteDriver()` for a host's `Driver`
     └── sleep.ts        — Sleep utility function
 
 tests/
 ├── kv.test.ts          — Main test file (node:test); every test runs against all adapters,
-│                         and the postgres adapter on PGlite too
+│                         the postgres adapter on PGlite and the sqlite adapter on a
+│                         sqlkit Driver too
 ├── driver.test.ts      — The postgres adapter on a pool, a client and a sqlkit Driver
-│                         (over node-postgres and over PGlite)
+│                         (over node-postgres and over PGlite), and the sqlite adapter
+│                         on a sqlkit Driver the host built
 ├── _tests-runner.ts    — Test harness: builds one client per adapter per test
 ├── _redis.ts           — Redis test helper
 ├── _pg.ts              — PostgreSQL test helper
@@ -79,16 +85,45 @@ dist/                   — `tsc -p tsconfig.build.json` output; gitignored; the
     and the host's transaction goes on, as on SQLite (convention 19). Nothing in the
     adapter sends `BEGIN`, `COMMIT`, `ROLLBACK` or `SAVEPOINT`. Pass the callback's `tx`
     to the `…On` helpers.
-12. Redis adapter owns the connection iff `initialize()` opened it (`#weOpened` flag). The Postgres and SQLite adapters never close the `db` they were given; the Postgres adapter never calls `close()` on a driver, its own or the host's (it would end the host's pool or client).
+12. Redis adapter owns the connection iff `initialize()` opened it (`#weOpened` flag). The Postgres and SQLite adapters never close the `db` they were given; the Postgres adapter never calls `close()` on a driver, its own or the host's (it would end the host's pool or client). The SQLite adapter never calls `close()` on a driver either, its own or the host's: sqlkit's `createSqliteDriver(db).close()` closes the host's handle.
 13. Key validation lives in `_withNs()` — enforced when `options.validateKeys !== false`. Reject empty strings, keys with `\0`, and total `namespace + key` length > 512.
 14. `ttl()` returns `TtlResult = { state: "missing" | "no-ttl" | "expires"; at? }` — discriminated union, not `Date | null | false`.
 15. `incr`/`decr`/`getSet`/`cas`/`setIfAbsent` must be atomic: Redis = Lua or NX; Postgres = UPSERT/UPDATE with RETURNING; SQLite = a single UPSERT/UPDATE (`setIfAbsent`, `cas`) or a read-modify-write inside `#atomic()` (`getSet`, `incr`/`decr`); Memory = plain read-modify-write (single-threaded).
-16. Non-numeric `incr`/`decr` target throws `TypeError("KV value is not a number")`. In Postgres, detect via the `22P02` in the sqlkit `SqlError`'s `code`; SQLite checks `typeof` in JS, like Memory. No other database error is caught, wrapped or translated: the caller gets sqlkit's `SqlError`.
+16. Non-numeric `incr`/`decr` target throws `TypeError("KV value is not a number")`. In Postgres, the upsert's `DO UPDATE` has a `WHERE` that skips a live value that is not a JSON number, so the statement returns no row and raises nothing (a transaction the host opened on the same `Driver` is not aborted); no row is the `TypeError`, and the `22P02` catch on the sqlkit `SqlError`'s `code` is a backstop for a delta PostgreSQL cannot cast. SQLite checks `typeof` in JS, like Memory. Neither SQL adapter catches, wraps or translates any other database error: the caller gets sqlkit's `SqlError` (on SQLite with node:sqlite's error as its `cause`).
 17. `keysIter` in both SQL adapters pages by keyset, 500 keys a page, so nothing stays open between yields and an early consumer break leaves nothing to release. It is not one snapshot. SQLite pages with `key > last`. Postgres pages in byte order on the `text_pattern_ops` prefix index (`key ~>~ $2`, `ORDER BY key USING ~<~`); a plain `key > $2 ORDER BY key` would walk the primary key across every namespace. Postgres `keys()` has no SQL `ORDER BY` for the same reason: it sorts in JS.
-18. SQLite: `src/` imports `node:sqlite` **type-only** — the caller passes the `DatabaseSync`. A runtime import would make every consumer of the package load `node:sqlite`.
-19. SQLite multi-statement operations go through `#atomic()`: `BEGIN IMMEDIATE`, or a savepoint when `db.isTransaction` (the caller's transaction on the same handle). The callback must stay synchronous — an `await` inside would let other work join the transaction.
-20. SQLite stores `value` as JSON text and `expires_at` as epoch ms (INTEGER), compared against a bound `Date.now()` — never SQLite's own clock. Read counts/integers through `Number()` (a handle opened with `readBigInts` returns bigints).
-21. TTL cleanup timers are `unref()`ed (`unref?.()`: browser and worker timers are plain numbers), so a client nobody destroyed cannot hold the process open; `destroy()` still clears them. Postgres's tick awaits its query, so it re-checks `_initialized` before re-arming, and `destroy()` clears `_initialized` before its first `await`. SQLite stops the cleanup (one error log) when it finds `db.isOpen` false.
+18. SQLite talks to the database through `src/utils/sqlite-driver.ts`: `ownSqliteDriver(db)`
+    builds kv's own sqlkit driver over the host's `DatabaseSync` (`createSqliteDriver`, one
+    per handle in a `WeakMap`, keeping 128 compiled statements: without the number every
+    call compiles). `@marianmeres/sqlkit/sqlite` loads `node:sqlite`, so it is imported
+    there with `import()`, when `initialize()` or `destroy(true)` first opens the driver
+    over a handle (on a host's `Driver` nothing is imported). Nothing in `src/` imports it
+    statically, and `node:sqlite` only as types: a static import would make every
+    consumer of the package load `node:sqlite` (a test checks the package root loads
+    none). Every statement goes through `#q()`, and the DDL through `#exec()`: on kv's own
+    driver on its sync tier, so a statement runs inside the call; on a host's `Driver` on
+    its async tier, so it waits its turn and joins the host's transaction when it was
+    issued inside one. Statement texts open with their keyword (`INSERT`,
+    `SELECT`, `UPDATE`, `DELETE`): the driver keeps only a query or a data change, and an
+    `exec` (the DDL) or a pragma empties what it kept, so neither inside an operation.
+19. SQLite multi-statement operations go through `#atomic(fn)`, `fn` a synchronous
+    function over the `SyncDriver` it is given: the driver's `sync.savepoint(fn)`, which
+    outside a transaction is `BEGIN IMMEDIATE` … `COMMIT`. When the caller has a `BEGIN`
+    open on the handle (`db.isTransaction`), the driver does not know that transaction and
+    SQLite refuses a second one, so `SAVEPOINT`, `ROLLBACK TO` and `RELEASE` go to the
+    handle and the unit's statements through the driver: the one place the adapter still
+    talks to the handle, besides `isOpen`. Neither `fn` nor `#atomic` may `await`: a unit
+    is over when the call returns, and tests pin it. The statements a unit shares with
+    `set`/`get`/`delete` are built once (`#setStatement`, `#getStatement`,
+    `#deleteStatement`), and the key is validated there, so an invalid key throws inside
+    the unit and undoes it. On a host's `Driver` the same `fn` runs in
+    `driver.savepoint(async () => fn(driver.sync))`: sqlkit's rule S3 puts its sync calls
+    inside that savepoint, which is a transaction of its own outside one, and a savepoint
+    of the host's transaction when the call was issued inside it (a failed unit is undone
+    alone, the host's transaction goes on). The unit waits its turn, then runs without a
+    break. There `driver.sync` is never used outside that callback: it is a `TypeError`
+    whenever the host has a transaction open elsewhere (S4).
+20. SQLite stores `value` as JSON text and `expires_at` as epoch ms (INTEGER), compared against a bound `Date.now()` — never SQLite's own clock. Read integer columns through `Number()` (a handle opened with `readBigInts` returns bigints); the driver's `rowCount` is already a number.
+21. TTL cleanup timers are `unref()`ed (`unref?.()`: browser and worker timers are plain numbers), so a client nobody destroyed cannot hold the process open; `destroy()` still clears them. Postgres's tick awaits its query, so it re-checks `_initialized` before re-arming, and `destroy()` clears `_initialized` before its first `await`. SQLite over a handle stops the cleanup (one error log) when it finds `db.isOpen` false. On a host's `Driver` its tick is Postgres's: it awaits the delete, logs a failure, re-checks `_initialized` and re-arms; a closed driver is told from another failure only by its message, so it is not told apart.
 22. Postgres talks to the database only through `src/utils/driver.ts`: `toPgDriver(db)`,
     called once in the constructor, turns a `pg.Pool` or `pg.Client` into a sqlkit
     `Driver` (one per object, in a `WeakMap`: `createPgDriver` adds an `error` listener on
@@ -99,14 +134,24 @@ dist/                   — `tsc -p tsconfig.build.json` output; gitignored; the
     Nothing in `src/` imports `pg` (it is a dev dependency); `@marianmeres/sqlkit/pg` is
     imported statically, so the package root loads `node:async_hooks`. A kv call issued
     inside a transaction the host opened on the same `Driver` joins it, by design.
-23. The SQLite adapter takes only a `DatabaseSync`: its constructor refuses a sqlkit
-    `Driver` with a `TypeError`.
+23. The SQLite adapter's `db` is a `SqliteDb`: a `DatabaseSync`, or a sqlkit `Driver` of
+    the `sqlite` dialect with a sync tier and `savepoint()` (node:sqlite's, from
+    `openSqlite()` or `createSqliteDriver()`; by its shape Durable Objects' too, which no
+    test covers). One flag set in the constructor, `#onHostDriver`, picks the path; it is
+    read in `#open`, `#q`, `#exec`, `#atomic` and the cleanup, and nowhere else. A
+    `Driver` of another dialect, one without a sync tier or without `savepoint()`
+    (`assertSqliteDriver`), and a `db` that is neither (`isDatabaseSync`) are a
+    `TypeError` at construction. `options.db` stays what the host passed. A `BEGIN` sent
+    to the handle behind a host's `Driver` makes a unit fail (`SqlError`, `cannot start a
+    transaction within a transaction`): documented, not handled, since kv has no handle
+    to look at. kv's methods are async, so they cannot be called from inside the host's
+    sync transaction (S5).
 24. A sqlkit minor is a kv minor. sqlkit is on `0.x`, so each minor is a caret range of
     its own: a consumer whose own sqlkit is on another minor gets two copies. Since 0.3.0
     two copies know each other's `SqlError` (a mark `instanceof` reads; a copy of 0.2.0
     or older has none, so its `instanceof SqlError` misses the errors of the driver kv
-    built). A minor can still change the `Driver` type the PostgreSQL adapter takes, as
-    0.3.0 did with `savepoint`. Moving kv's range across a sqlkit minor therefore takes,
+    built). A minor can still change the `Driver` type both SQL adapters take, as 0.3.0
+    did with `savepoint`. Moving kv's range across a sqlkit minor therefore takes,
     together: `engines.node` to sqlkit's, the README's "Requires Node" and the `^0.x.0`
     in its notes and in `API.md`, and a "Changes in" section in the README telling
     consumers to move their own sqlkit.
@@ -115,23 +160,25 @@ dist/                   — `tsc -p tsconfig.build.json` output; gitignored; the
     sqlkit `Driver` over the test file's one in-memory PGlite (`tests/_pglite.ts`). Its
     `info().type` is `"postgres"`, so a test that needs a client's adapter type reads
     `client.info().type`, never the key in `clients`. `@electric-sql/pglite` is a dev
-    dependency; nothing in `src/` imports it.
+    dependency; nothing in `src/` imports it. A sixth client, `sqliteDriver`, is the
+    sqlite adapter on a sqlkit `Driver` from `openSqlite()`, a fresh in-memory database
+    per test closed in the `finally`; its `info().type` is `"sqlite"`.
 
 ## Before Making Changes
 
 - [ ] Check existing patterns in adapter implementations
 - [ ] Add or extend a test in `tests/kv.test.ts` (or in `tests/driver.test.ts` for what only
-      the postgres adapter's `db` decides), then run `pnpm run ci`
+      an SQL adapter's `db` decides), then run `pnpm run ci`
 - [ ] Verify adapter limitations are documented (README feature matrix, API.md)
 
 ## Supported Adapters
 
-| Adapter    | Type String  | Required Options                                                      | Limitations                                                                                               |
-| ---------- | ------------ | --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| Memory     | `"memory"`   | None                                                                  | Not persisted                                                                                             |
-| Redis      | `"redis"`    | `db` (Redis client)                                                   | Namespace required; `keys()`/`clear()` unavailable in cluster mode                                        |
-| PostgreSQL | `"postgres"` | `db` (`pg.Pool`, `pg.Client` or a sqlkit `Driver`, PGlite's included) | `tableName` limited to `[A-Za-z0-9_]` + optional `schema.` prefix                                         |
-| SQLite     | `"sqlite"`   | `db` (`DatabaseSync`)                                                 | `tableName` limited to `[A-Za-z0-9_]`, no schema prefix; synchronous driver; a sqlkit `Driver` is refused |
+| Adapter    | Type String  | Required Options                                                                     | Limitations                                                                 |
+| ---------- | ------------ | ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------- |
+| Memory     | `"memory"`   | None                                                                                 | Not persisted                                                               |
+| Redis      | `"redis"`    | `db` (Redis client)                                                                  | Namespace required; `keys()`/`clear()` unavailable in cluster mode          |
+| PostgreSQL | `"postgres"` | `db` (`pg.Pool`, `pg.Client` or a sqlkit `Driver`, PGlite's included)                | `tableName` limited to `[A-Za-z0-9_]` + optional `schema.` prefix           |
+| SQLite     | `"sqlite"`   | `db` (`DatabaseSync`, or a sqlkit `Driver` of the `sqlite` dialect with a sync tier) | `tableName` limited to `[A-Za-z0-9_]`, no schema prefix; synchronous engine |
 
 ## Core API
 
@@ -201,6 +248,9 @@ type SetMultipleEntry = [string, any] | { key: string; value: any; ttl?: number 
 // the postgres adapter's `db`; sqlkit's structural types, so `src/` never imports `pg`
 type PostgresDb = PgPoolLike | PgStandaloneClientLike | Driver;
 
+// the sqlite adapter's `db`; `DatabaseSync` is imported as a type only
+type SqliteDb = DatabaseSync | Driver;
+
 type TtlResult =
 	| { state: "missing" }
 	| { state: "no-ttl" }
@@ -227,8 +277,9 @@ the remote.
 
 ## Test Environment Variables
 
-Every test in `tests/kv.test.ts` runs against all four adapters, and against the postgres
-adapter on PGlite (in memory, in the test process: it needs nothing), so tests need a live
+Every test in `tests/kv.test.ts` runs against all four adapters, against the postgres
+adapter on PGlite (in memory, in the test process: it needs nothing) and against the
+sqlite adapter on a sqlkit `Driver` (in memory too), so tests need a live
 Postgres and Redis (SQLite uses a fresh `:memory:` database per test and needs nothing).
 `tests/driver.test.ts` needs Postgres only. Put
 these in `.env` (see `.env.example`); CI provides them via service containers
