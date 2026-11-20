@@ -5,19 +5,26 @@ Work after 4.0.0, ranked, not scheduled. This is the open copy: change it here.
 The rows come from the plan that moved the PostgreSQL adapter onto
 [`@marianmeres/sqlkit`](https://www.npmjs.com/package/@marianmeres/sqlkit) for 4.0.0, and
 their ids continue that plan's. The plan was a local working set and is not part of the
-repository, so a row that needs more than one line has its detail below the table.
+repository, so a row that needs more than one line has its detail below the table. The
+same goes for the plan of T07, whose rows took the ids T15 to T19.
+
+Decided on 2026-11-20: kv stays on the 4.x line. No next major is planned, so a change
+that needs one waits (T10), and one that bends semver at an edge goes into a minor of
+its own, with a "Changes in" section in the README that names it (T07).
 
 **Status:** ⬜ open · ⏭️ deferred until its trigger · ✅ done
 
-| Status | ID  | Rank | Task                                                                                                                                                                                                                                     |
-| ------ | --- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| ⬜     | T07 | 1    | The SQLite adapter onto sqlkit: `db` takes a `DatabaseSync` or a `Driver`, one code path. Needs its own plan. Its trigger is met: sqlkit has savepoints since 0.3.0 (and keeps prepared statements since 0.2.0), and kv is on 0.3 (T12). |
-| ✅     | T08 | 2    | CI's PostgreSQL image from `postgres:17` to `postgres:18` in `.github/workflows/ci.yml`, the major of the local and production databases. A change of its own.                                                                           |
-| ✅     | T09 | 3    | PGlite as a tested target: a dev dependency, a fifth client in `tests/_tests-runner.ts` so every test runs on it, and its cases in `tests/driver.test.ts`. In 4.1.0.                                                                     |
-| ⬜     | T10 | 4    | `redis` out of `dependencies`: `src/` imports it for types only. Needs a structural type for the client.                                                                                                                                 |
-| ⏭️     | T11 | 5    | The PostgreSQL statements as sqlkit `sql` fragments. Trigger: a statement that has to be composed from parts, or the two SQL adapters sharing statement code.                                                                            |
-| ✅     | T12 | 6    | sqlkit to `^0.3.1`, in 4.1.0. From 0.3.0 a `SqlError` is recognized across copies of sqlkit, so the docs no longer ask an app to stay on the minor kv installs.                                                                          |
-| ✅     | T13 | 7    | The PostgreSQL adapter's `transaction()` through the driver's `savepoint()`: inside a transaction the host opened on the same `Driver`, a failed unit is undone alone, as on SQLite. In 4.1.0.                                           |
+| Status | ID  | Rank | Task                                                                                                                                                                                                                              |
+| ------ | --- | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ⬜     | T07 | 1    | The SQLite adapter onto sqlkit: `db` takes a `DatabaseSync` or a `Driver`. A normalizing move: both SQL adapters on one driver contract. On the 4.x line, as a minor of its own (4.2.0). Planned; its plan's rows are T15 to T19. |
+| ✅     | T08 | –    | CI's PostgreSQL image from `postgres:17` to `postgres:18` in `.github/workflows/ci.yml`, the major of the local and production databases. A change of its own.                                                                    |
+| ✅     | T09 | –    | PGlite as a tested target: a dev dependency, a fifth client in `tests/_tests-runner.ts` so every test runs on it, and its cases in `tests/driver.test.ts`. In 4.1.0.                                                              |
+| ⏭️     | T10 | 3    | `redis` out of `dependencies`: `src/` imports it for types only. Needs a structural type for the client. Trigger: a major, and none is planned.                                                                                   |
+| ⏭️     | T11 | 4    | The PostgreSQL statements as sqlkit `sql` fragments. Trigger: a statement that has to be composed from parts, or the two SQL adapters sharing statement code.                                                                     |
+| ✅     | T12 | –    | sqlkit to `^0.3.1`, in 4.1.0. From 0.3.0 a `SqlError` is recognized across copies of sqlkit, so the docs no longer ask an app to stay on the minor kv installs.                                                                   |
+| ✅     | T13 | –    | The PostgreSQL adapter's `transaction()` through the driver's `savepoint()`: inside a transaction the host opened on the same `Driver`, a failed unit is undone alone, as on SQLite. In 4.1.0.                                    |
+| ⬜     | T14 | 2    | `incr`/`decr` on a non-number must not abort the host's transaction on PostgreSQL: a statement that does not raise. Rides with T07's plan.                                                                                        |
+| ⏭️     | T20 | 5    | Durable Objects as a tested target of the SQLite adapter, through sqlkit's driver for them. Trigger: T07 has landed, and someone wants kv there.                                                                                  |
 
 ## T07: the SQLite adapter onto sqlkit
 
@@ -27,8 +34,14 @@ could not carry it without a regression. Three gaps were measured or reproduced 
 sqlkit 0.1.1 on 2026-11-19, and checked again on 0.2.0 on 2026-11-20 (measured on Node
 26.13, a database in memory). sqlkit 0.2.0 closed the first. sqlkit 0.3.0 closed the
 second but for one case, which the port carries itself (checked on 0.3.1 the same day,
-on the same Node, a database in memory). The third is the port's to decide. Nothing in
-sqlkit stands in the port's way any more.
+on the same Node, a database in memory). The third is the port's to decide, and is
+answered below. Nothing in sqlkit stands in the port's way any more.
+
+Decided on 2026-11-20: the port goes ahead, as a normalizing move. No consumer asks for
+it; the point is that both SQL adapters run on one driver contract, take a host's
+`Driver`, keep a unit all-or-nothing the same way and reject with the same errors. It
+ships on the 4.x line as a minor of its own, 4.2.0, so that what changes for a caller
+has one section of notes ("What changes for a caller" below).
 
 1. **Statement cost. Closed by sqlkit 0.2.0.** kv prepares each statement once and
    caches it: about 0.9 µs a `get` and 1.3 µs a `set`. sqlkit 0.1.1 prepared a statement
@@ -77,15 +90,50 @@ sqlkit stands in the port's way any more.
    above is that branch's case. Given a `Driver`, kv has no handle to look at: the
    caller's transactions are the ones opened through the driver, and a `BEGIN` behind it
    is refused as above.
-3. **`node:sqlite` at run time. Open.** kv imports `node:sqlite` for its types only: the
-   caller passes the handle, so a consumer that never uses the SQLite adapter never loads
-   it. `@marianmeres/sqlkit/sqlite` imports it at run time. sqlkit has no row for this:
-   the port decides whether kv's root may load it.
+3. **`node:sqlite` at run time. Answered: a lazy import.** kv imports `node:sqlite` for
+   its types only: the caller passes the handle, so a consumer that never uses the SQLite
+   adapter never loads it. `@marianmeres/sqlkit/sqlite` imports it at run time. So the
+   port imports that entry with `import()`, in `initialize()`, and only when `db` is a
+   `DatabaseSync`: by then the host has loaded `node:sqlite` itself. Given a `Driver`,
+   kv imports nothing. kv's root goes on loading no `node:sqlite` (checked on the root as
+   it is: it loads `node:async_hooks`, for the PostgreSQL driver, and nothing of
+   SQLite). A static import would be simpler and prints no warning on Node 24.22 or
+   26.13, but it would load the module for every consumer, and make the root unloadable
+   on a runtime without it.
 
-A fourth point decides which tier a port runs on. sqlkit's sync tier refuses a call while
-an async transaction is open elsewhere (its rule S4, a `TypeError`), where the async tier
-waits its turn. A port keeps kv's own guarantees only on the async tier, at the async
-tier's cost in gap 1.
+A fourth point decides which tier the port runs on, and the answer depends on what `db`
+is. An earlier reading here put the whole port on the async tier. It was wrong for a
+handle the host also uses directly (checked on 0.3.1):
+
+- **Given a `DatabaseSync`, the sync tier.** kv builds the driver and nobody else has
+  it, so no async transaction is ever open on it and sqlkit's rule S4 cannot bite. A
+  statement runs inside the call, and a unit is over when the call returns, as today.
+  On the async tier a unit has an `await` in it, and the host's own statement on its
+  handle can land in that gap: in the probe the host's write went into the unit and was
+  rolled back with it, and the host's `BEGIN` was refused with `cannot start a
+  transaction within a transaction`.
+- **Given a `Driver`, the async tier outside and the sync tier inside.** The host may
+  have a transaction open on it. A sync call from elsewhere is then a `TypeError` (S4),
+  where an async one waits its turn. So a single statement is `driver.query()`, and a
+  unit is `driver.savepoint(async () => unit(driver.sync))`: the savepoint waits its
+  turn and joins the host's transaction, and inside its callback the sync tier runs in
+  it (rule S3). The unit itself stays synchronous, so it is written once, over a
+  `SyncDriver`, for both cases. The `Driver` therefore needs a sync tier; node:sqlite's
+  and Durable Objects' have one.
+
+What it costs, in one run on 0.3.1 (µs a call, a database in memory): today 0.6 a `get`,
+1.1 a `set`, 2.3 an `incr`; on the sync tier with statements kept 1.0, 1.2 and 3.1; on a
+host's `Driver` 1.2, 1.4 and 3.5.
+
+What changes for a caller who passes a `DatabaseSync`, which the notes of 4.2.0 name:
+
+- A statement SQLite refused rejects with sqlkit's `SqlError` (a locked database is a
+  `BusyError`, `code` `"5"`, `retryable`), with node:sqlite's error as `cause` and the
+  same message. Today it is node:sqlite's own `Error`, `code` `"ERR_SQLITE_ERROR"`,
+  `errcode` `5`. 4.0.0 listed the same change on PostgreSQL as breaking.
+- `options.db` is typed as what the option takes, a `DatabaseSync` or a `Driver`.
+- `initialize()` and `destroy()` await an `import()` the first time, so their work is no
+  longer done inside the call.
 
 So the order that leaves no regression:
 
@@ -93,9 +141,9 @@ So the order that leaves no regression:
 2. sqlkit gets its statement cache (done in sqlkit 0.2.0) and savepoints (done in sqlkit
    0.3.0).
 3. kv moves to sqlkit 0.3 (T12). Done in 4.1.0.
-4. kv's SQLite adapter ports: `db` accepts a `DatabaseSync` or a `Driver`, and there is
-   one code path. kv's SQLite tests, the joined transaction among them, are the case
-   that proves it.
+4. kv's SQLite adapter ports: `db` accepts a `DatabaseSync` or a `Driver`, and every
+   statement goes through a driver. kv's SQLite tests, the joined transaction among
+   them, are the case that proves it. Planned for 4.2.0.
 
 Until then a host that opened its database with sqlkit's `openSqlite()` cannot put kv on
 that connection: the function answers a `Driver` and does not expose the handle.
@@ -182,3 +230,28 @@ outside one. So the adapter calls that, and the two SQL adapters answer alike. T
 is "driver: transaction() inside the host's transaction is undone alone" in
 `tests/driver.test.ts`; it fails on the old call with a `TransactionAbortedError`. A
 `Driver` without `savepoint()` is refused at construction.
+
+## T14: `incr` on a non-number, inside the host's transaction
+
+On PostgreSQL the adapter adds in SQL, and a stored value that is not a number makes the
+cast raise `22P02`, which the adapter turns into `TypeError("KV value is not a number")`.
+Inside a transaction the host opened on the same `Driver`, that failed statement has
+already aborted the host's transaction: a host that catches the `TypeError` and goes on
+gets a `TransactionAbortedError` at its commit and loses the lot. On SQLite and in
+memory the same host carries on.
+
+A savepoint around every `incr` would cost two round trips each. The statement can
+simply not raise: a `WHERE` on its `DO UPDATE` that lets through an expired row or a
+`jsonb_typeof(value) = 'number'`, so a live non-number updates nothing and returns no
+row, and no row is the `TypeError`. Checked on PostgreSQL 18.6 and on PGlite: the
+answers are today's for a new key, a number, a decimal and an expired key; a string, an
+object, an array, a boolean, a `null` and a numeric string are left as they are; and
+the host's transaction goes on and commits.
+
+## T20: Durable Objects as a tested target
+
+sqlkit has a driver for a Durable Object's SQLite storage, of the `sqlite` dialect and
+with a sync tier, which is what the SQLite adapter will take after T07. Whether kv's
+statements run there (`GLOB`, `json_each`, the upsert, the partial index) has not been
+tried, and a test needs workerd. After T07 `API.md` says it is expected to work and is
+not tested.
