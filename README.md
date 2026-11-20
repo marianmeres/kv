@@ -143,6 +143,18 @@ const db = createPgDriver(new pg.Pool({ connectionString: process.env.DATABASE_U
 const client = createKVClient("my-app-namespace:", "postgres", { db });
 ```
 
+A `Driver` over [PGlite](https://pglite.dev), Postgres compiled to WebAssembly, is a
+tested target too: a database inside your process, with no server, for tests or a
+small app.
+
+```typescript
+import { PGlite } from "@electric-sql/pglite";
+import { createPgliteDriver } from "@marianmeres/sqlkit/pglite";
+
+const db = createPgliteDriver(await PGlite.create()); // in memory; pass a path to persist
+const client = createKVClient("my-app-namespace:", "postgres", { db });
+```
+
 - **The adapter never closes what it was given.** `destroy()` leaves the pool, the client
   or the driver open; ending it is yours. Several adapters can share one.
 - **`transaction()` runs on one connection.** On a `pg.Pool` it pins one for the whole
@@ -192,8 +204,8 @@ const client = createKVClient("my-app-namespace:", "sqlite", {
 ## Changes in 4.1.0
 
 No signature changes. kv now installs `@marianmeres/sqlkit` 0.3, where 4.0.0 installed
-0.1, and two things follow from that. A third changes the PostgreSQL adapter at one
-edge. Each note says first what you have to do, if anything.
+0.1, and two things follow from that. The last two notes are about the PostgreSQL
+adapter. Each note says first what you have to do, if anything.
 
 - **Node 24.20 or later on the 24 line, or 26.6 or later; not 25.** Update Node if yours
   is older. It is what sqlkit requires since 0.2, and kv's `engines` now say the same;
@@ -214,6 +226,8 @@ edge. Each note says first what you have to do, if anything.
   refused aborted it. Outside a transaction of yours nothing changes. A `Driver` without
   `savepoint()` (a sqlkit older than 0.3.0) is refused at construction, with a
   `TypeError`.
+- **A sqlkit `Driver` over PGlite is a tested `db` for the postgres adapter.** Nothing to
+  do. 4.0.0 said it was expected to work; now every test of the suite runs on it.
 
 ## Breaking Changes (4.0.0)
 

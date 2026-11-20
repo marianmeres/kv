@@ -844,7 +844,10 @@ server dropped does not end the process: it is reported through `process.emitWar
 when you have no listener of your own.
 
 A `Driver` over PGlite (`createPgliteDriver` from `@marianmeres/sqlkit/pglite`) is of the
-`pg` dialect and is expected to work; it is not part of the test suite yet.
+`pg` dialect and is a tested target: every test of the suite runs on it, as on a
+`pg.Pool`. PGlite is Postgres compiled to WebAssembly, one connection inside your
+process, so calls take turns there as on one `pg.Client`. For that your app depends on
+`@electric-sql/pglite` and on `@marianmeres/sqlkit` itself (`^0.3.0`).
 
 **Errors:** a statement the database refused rejects with sqlkit's `SqlError` (exported
 by `@marianmeres/sqlkit`), unwrapped and untranslated. Its `code` is Postgres's SQLSTATE

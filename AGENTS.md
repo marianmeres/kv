@@ -5,7 +5,7 @@ Machine-friendly reference for AI agents working with this codebase.
 ## Quick Reference
 
 - **Stack**: TypeScript (erasable-only), Node LTS (`.node-version`), pnpm, `node:test`, Biome.
-- **Install**: `pnpm install` | **Test**: `pnpm test` (needs Postgres + Redis; SQLite runs in memory;
+- **Install**: `pnpm install` | **Test**: `pnpm test` (needs Postgres + Redis; SQLite and PGlite run in memory;
   test files run one at a time) |
   **Check all**: `pnpm run ci` | **Build**: `pnpm run build`
 - **Published**: npm (`dist/`, built by `tsc`)
@@ -31,11 +31,14 @@ src/
     └── sleep.ts        — Sleep utility function
 
 tests/
-├── kv.test.ts          — Main test file (node:test); every test runs against all adapters
+├── kv.test.ts          — Main test file (node:test); every test runs against all adapters,
+│                         and the postgres adapter on PGlite too
 ├── driver.test.ts      — The postgres adapter on a pool, a client and a sqlkit Driver
+│                         (over node-postgres and over PGlite)
 ├── _tests-runner.ts    — Test harness: builds one client per adapter per test
 ├── _redis.ts           — Redis test helper
 ├── _pg.ts              — PostgreSQL test helper
+├── _pglite.ts          — PGlite test helper (one in-memory PGlite per test file, as a sqlkit Driver)
 ├── _sqlite.ts          — SQLite test helper (fresh `:memory:` database per test)
 └── _no-destroy-child.ts — child process: an adapter left running must not hold it open
 
@@ -107,6 +110,12 @@ dist/                   — `tsc -p tsconfig.build.json` output; gitignored; the
     together: `engines.node` to sqlkit's, the README's "Requires Node" and the `^0.x.0`
     in its notes and in `API.md`, and a "Changes in" section in the README telling
     consumers to move their own sqlkit.
+25. PGlite is a tested target of the postgres adapter, not an adapter of its own.
+    `tests/_tests-runner.ts` builds a fifth client, `pglite`: the postgres adapter on a
+    sqlkit `Driver` over the test file's one in-memory PGlite (`tests/_pglite.ts`). Its
+    `info().type` is `"postgres"`, so a test that needs a client's adapter type reads
+    `client.info().type`, never the key in `clients`. `@electric-sql/pglite` is a dev
+    dependency; nothing in `src/` imports it.
 
 ## Before Making Changes
 
@@ -117,12 +126,12 @@ dist/                   — `tsc -p tsconfig.build.json` output; gitignored; the
 
 ## Supported Adapters
 
-| Adapter    | Type String  | Required Options                                   | Limitations                                                                                               |
-| ---------- | ------------ | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| Memory     | `"memory"`   | None                                               | Not persisted                                                                                             |
-| Redis      | `"redis"`    | `db` (Redis client)                                | Namespace required; `keys()`/`clear()` unavailable in cluster mode                                        |
-| PostgreSQL | `"postgres"` | `db` (`pg.Pool`, `pg.Client` or a sqlkit `Driver`) | `tableName` limited to `[A-Za-z0-9_]` + optional `schema.` prefix                                         |
-| SQLite     | `"sqlite"`   | `db` (`DatabaseSync`)                              | `tableName` limited to `[A-Za-z0-9_]`, no schema prefix; synchronous driver; a sqlkit `Driver` is refused |
+| Adapter    | Type String  | Required Options                                                      | Limitations                                                                                               |
+| ---------- | ------------ | --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| Memory     | `"memory"`   | None                                                                  | Not persisted                                                                                             |
+| Redis      | `"redis"`    | `db` (Redis client)                                                   | Namespace required; `keys()`/`clear()` unavailable in cluster mode                                        |
+| PostgreSQL | `"postgres"` | `db` (`pg.Pool`, `pg.Client` or a sqlkit `Driver`, PGlite's included) | `tableName` limited to `[A-Za-z0-9_]` + optional `schema.` prefix                                         |
+| SQLite     | `"sqlite"`   | `db` (`DatabaseSync`)                                                 | `tableName` limited to `[A-Za-z0-9_]`, no schema prefix; synchronous driver; a sqlkit `Driver` is refused |
 
 ## Core API
 
@@ -218,7 +227,8 @@ the remote.
 
 ## Test Environment Variables
 
-Every test in `tests/kv.test.ts` runs against all four adapters, so tests need a live
+Every test in `tests/kv.test.ts` runs against all four adapters, and against the postgres
+adapter on PGlite (in memory, in the test process: it needs nothing), so tests need a live
 Postgres and Redis (SQLite uses a fresh `:memory:` database per test and needs nothing).
 `tests/driver.test.ts` needs Postgres only. Put
 these in `.env` (see `.env.example`); CI provides them via service containers

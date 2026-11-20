@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import process from "node:process";
 import type { DatabaseSync } from "node:sqlite";
-import { SqlError } from "@marianmeres/sqlkit";
+import { type Driver, SqlError } from "@marianmeres/sqlkit";
 import { createPgDriver } from "@marianmeres/sqlkit/pg";
 import { openSqlite } from "@marianmeres/sqlkit/sqlite";
 import pg from "pg";
@@ -9,10 +9,12 @@ import type { AdapterPostgres } from "../src/adapter/postgres.ts";
 import { type AdapterAbstract, createKVClient, type Operation } from "../src/kv.ts";
 import { sleep } from "../src/utils/sleep.ts";
 import { createPg } from "./_pg.ts";
+import { createPglite } from "./_pglite.ts";
 import { testsRunner } from "./_tests-runner.ts";
 
-// The postgres adapter's `db` as a pool, a client or a sqlkit Driver. Every case is raw:
-// it builds what it needs, uses its own table, touches no Redis, and ends what it built.
+// The postgres adapter's `db` as a pool, a client or a sqlkit Driver, over node-postgres
+// and over PGlite. Every case is raw: it builds what it needs, uses its own table, touches
+// no Redis, and ends what it built.
 
 const TABLE = "_kv_driver_test";
 
@@ -127,6 +129,74 @@ async function reference(): Promise<[string, unknown][]> {
 	}
 }
 
+/**
+ * Operations issued inside a transaction the host opened on the shared `Driver` are part
+ * of it: its rollback takes them, its commit keeps them.
+ */
+async function assertJoins(driver: Driver, kv: AdapterAbstract): Promise<void> {
+	const boom = new Error("the host rolls back");
+	await assert.rejects(
+		driver.transaction(async () => {
+			await kv.set("joined", 1);
+			await kv.transaction([{ type: "set", key: "nested", value: 1 }]);
+			throw boom;
+		}),
+		(e) => e === boom,
+	);
+	assert.equal(await kv.get("joined"), null);
+	assert.equal(await kv.get("nested"), null);
+
+	await driver.transaction(async () => {
+		await kv.set("kept", 1);
+	});
+	assert.equal(await kv.get("kept"), 1);
+}
+
+/**
+ * A kv `transaction()` that fails inside the host's transaction is undone alone, and the
+ * host's transaction goes on and commits.
+ */
+async function assertUndoneAlone(driver: Driver, kv: AdapterAbstract): Promise<void> {
+	await driver.transaction(async () => {
+		await kv.set("before", 1);
+
+		// fails before it reaches the database: an invalid key
+		await assert.rejects(
+			kv.transaction([
+				{ type: "set", key: "a", value: 1 },
+				{ type: "set", key: "", value: 2 },
+			]),
+			{ name: "TypeError" },
+		);
+
+		// fails in the database (jsonb refuses \u0000 inside a string), which without a
+		// savepoint would abort the host's transaction
+		const refused = await kv
+			.transaction([
+				{ type: "set", key: "b", value: 1 },
+				{ type: "set", key: "nul", value: "a\u0000b" },
+			])
+			.then(
+				() => undefined,
+				(e: unknown) => e,
+			);
+		assert.ok(refused instanceof SqlError, `got ${String(refused)}`);
+		assert.equal(refused.code, "22P05");
+
+		// the host's transaction goes on
+		await kv.transaction([{ type: "set", key: "c", value: 1 }]);
+		await kv.set("after", 1);
+	});
+
+	assert.deepEqual(await kv.getMultiple(["before", "a", "b", "c", "after"]), {
+		before: 1,
+		a: null,
+		b: null,
+		c: 1,
+		after: 1,
+	});
+}
+
 testsRunner([
 	{
 		name: "driver: a sqlkit Driver built by the host answers as the memory adapter does",
@@ -203,22 +273,7 @@ testsRunner([
 				await kv.destroy(true);
 				await kv.initialize();
 
-				const boom = new Error("the host rolls back");
-				await assert.rejects(
-					driver.transaction(async () => {
-						await kv.set("joined", 1);
-						await kv.transaction([{ type: "set", key: "nested", value: 1 }]);
-						throw boom;
-					}),
-					(e) => e === boom,
-				);
-				assert.equal(await kv.get("joined"), null);
-				assert.equal(await kv.get("nested"), null);
-
-				await driver.transaction(async () => {
-					await kv.set("kept", 1);
-				});
-				assert.equal(await kv.get("kept"), 1);
+				await assertJoins(driver, kv);
 			} finally {
 				await kv.destroy(true);
 				await pool.end();
@@ -236,50 +291,41 @@ testsRunner([
 				await kv.destroy(true);
 				await kv.initialize();
 
-				await driver.transaction(async () => {
-					await kv.set("before", 1);
-
-					// fails before it reaches the database: an invalid key
-					await assert.rejects(
-						kv.transaction([
-							{ type: "set", key: "a", value: 1 },
-							{ type: "set", key: "", value: 2 },
-						]),
-						{ name: "TypeError" },
-					);
-
-					// fails in the database (jsonb refuses \u0000 inside a string), which
-					// without a savepoint would abort the host's transaction
-					const refused = await kv
-						.transaction([
-							{ type: "set", key: "b", value: 1 },
-							{ type: "set", key: "nul", value: "a\u0000b" },
-						])
-						.then(
-							() => undefined,
-							(e: unknown) => e,
-						);
-					assert.ok(refused instanceof SqlError, `got ${String(refused)}`);
-					assert.equal(refused.code, "22P05");
-
-					// the host's transaction goes on
-					await kv.transaction([{ type: "set", key: "c", value: 1 }]);
-					await kv.set("after", 1);
-				});
-
-				assert.deepEqual(
-					await kv.getMultiple(["before", "a", "b", "c", "after"]),
-					{
-						before: 1,
-						a: null,
-						b: null,
-						c: 1,
-						after: 1,
-					},
-				);
+				await assertUndoneAlone(driver, kv);
 			} finally {
 				await kv.destroy(true);
 				await pool.end();
+			}
+		},
+	},
+	{
+		name: "driver: a sqlkit Driver over PGlite answers as the memory adapter does",
+		raw: true,
+		async fn() {
+			const driver = await createPglite();
+			const kv = createKVClient("p:", "postgres", { db: driver, tableName: TABLE });
+			try {
+				await kv.initialize();
+				assert.deepEqual(await exercise(kv), await reference());
+			} finally {
+				await kv.destroy(true);
+				await driver.close();
+			}
+		},
+	},
+	{
+		name: "driver: on PGlite, operations join the host's transaction and transaction() is undone alone",
+		raw: true,
+		async fn() {
+			const driver = await createPglite();
+			const kv = createKVClient("x:", "postgres", { db: driver, tableName: TABLE });
+			try {
+				await kv.initialize();
+				await assertJoins(driver, kv);
+				await assertUndoneAlone(driver, kv);
+			} finally {
+				await kv.destroy(true);
+				await driver.close();
 			}
 		},
 	},

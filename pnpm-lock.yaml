@@ -179,6 +179,9 @@ importers:
       '@biomejs/biome':
         specifier: ^2.6.8
         version: 2.6.8
+      '@electric-sql/pglite':
+        specifier: ^0.5.17
+        version: 0.5.17
       '@types/node':
         specifier: ^26.6.6
         version: 26.6.6
@@ -262,6 +265,9 @@ packages:
     engines: {node: '>=14.21.3'}
     cpu: [x64]
     os: [win32]
+
+  '@electric-sql/pglite@0.5.17':
+    resolution: {integrity: sha512-8SvKjiUjaU+0O0dbxjOfN+jXz14TEqDWbwDkYOW1aQ11y/ph2JvFVI27ABBo5nfw+ZfSqy4hKCNlbnbB1TDE+g==}
 
   '@marianmeres/clog@3.23.1':
     resolution: {integrity: sha512-Ck1nmcZFJX+f1LUHgbmQ4Wmof8w1yivFjfFFEtTP2NLMyADye8ijYXGwyNUvnkRVHmnKvnCqX6Yl6Dzieyx9UQ==}
@@ -567,6 +573,8 @@ snapshots:
 
   '@biomejs/cli-win32-x64@2.6.8':
     optional: true
+
+  '@electric-sql/pglite@0.5.17': {}
 
   '@marianmeres/clog@3.23.1': {}
 

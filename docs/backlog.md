@@ -13,7 +13,7 @@ repository, so a row that needs more than one line has its detail below the tabl
 | ------ | --- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | ⬜     | T07 | 1    | The SQLite adapter onto sqlkit: `db` takes a `DatabaseSync` or a `Driver`, one code path. Needs its own plan. Its trigger is met: sqlkit has savepoints since 0.3.0 (and keeps prepared statements since 0.2.0), and kv is on 0.3 (T12). |
 | ✅     | T08 | 2    | CI's PostgreSQL image from `postgres:17` to `postgres:18` in `.github/workflows/ci.yml`, the major of the local and production databases. A change of its own.                                                                           |
-| ⬜     | T09 | 3    | PGlite as a tested target: a dev dependency and its cases in `tests/driver.test.ts`. Ready once someone wants kv on PGlite.                                                                                                              |
+| ✅     | T09 | 3    | PGlite as a tested target: a dev dependency, a fifth client in `tests/_tests-runner.ts` so every test runs on it, and its cases in `tests/driver.test.ts`. In 4.1.0.                                                                     |
 | ⬜     | T10 | 4    | `redis` out of `dependencies`: `src/` imports it for types only. Needs a structural type for the client.                                                                                                                                 |
 | ⏭️     | T11 | 5    | The PostgreSQL statements as sqlkit `sql` fragments. Trigger: a statement that has to be composed from parts, or the two SQL adapters sharing statement code.                                                                            |
 | ✅     | T12 | 6    | sqlkit to `^0.3.1`, in 4.1.0. From 0.3.0 a `SqlError` is recognized across copies of sqlkit, so the docs no longer ask an app to stay on the minor kv installs.                                                                          |
@@ -116,13 +116,19 @@ figures above is the measurement's, not the version's: compare within a run.
 
 ## T09: PGlite as a tested target
 
-PGlite speaks the `pg` dialect, so a host can pass a sqlkit `Driver` built on it
-(`createPgliteDriver` from `@marianmeres/sqlkit/pglite`) as the PostgreSQL adapter's
-`db`. A probe ran the adapter's statements that way, 47 operations: each answer matched
-the memory adapter's, and keyset paging walked exactly what `keys("*")` returns. It needs
-`@electric-sql/pglite` as a dev dependency and its cases in `tests/driver.test.ts` before
-it can be called supported. Until then `API.md` says it is expected to work and is not
-tested.
+Done on 2026-11-20, for 4.1.0. PGlite speaks the `pg` dialect, so a host passes a sqlkit
+`Driver` built on it (`createPgliteDriver` from `@marianmeres/sqlkit/pglite`) as the
+PostgreSQL adapter's `db`. Nothing in `src/` changed: the adapter already ran on it.
+What was missing was the proof, and "expected to work, not tested" in `API.md` is what
+keeps someone from relying on it. So it was built ahead of a consumer.
+
+- `@electric-sql/pglite` is a dev dependency (26 MB, nothing a consumer installs).
+- `tests/_tests-runner.ts` builds a fifth client, `pglite`, so every test in
+  `tests/kv.test.ts` runs on it. The file shares one in-memory PGlite
+  (`tests/_pglite.ts`): starting one takes about half a second. The file takes about
+  25 s where it took 19 s.
+- `tests/driver.test.ts` has its two cases: the answers of the memory adapter, and the
+  host's transaction (operations join it, a failed `transaction()` is undone alone).
 
 ## T10: `redis` out of `dependencies`
 

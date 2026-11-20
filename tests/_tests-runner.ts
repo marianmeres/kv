@@ -6,6 +6,7 @@ import type { AdapterRedis } from "../src/adapter/redis.ts";
 import type { AdapterSqlite } from "../src/adapter/sqlite.ts";
 import { createKVClient } from "../src/kv.ts";
 import { createPg } from "./_pg.ts";
+import { sharedPglite } from "./_pglite.ts";
 import { createRedis } from "./_redis.ts";
 import { createSqlite } from "./_sqlite.ts";
 
@@ -17,6 +18,8 @@ export function testsRunner(
 			clients: {
 				memory: AdapterMemory;
 				postgres: AdapterPostgres;
+				/** The postgres adapter again, on PGlite through a sqlkit `Driver`. */
+				pglite: AdapterPostgres;
 				redis: AdapterRedis;
 				sqlite: AdapterSqlite;
 			};
@@ -63,6 +66,9 @@ export function testsRunner(
 						const clients = {
 							memory: createKVClient(ns, "memory"),
 							postgres: createKVClient(ns, "postgres", { db: dbPg }),
+							pglite: createKVClient(ns, "postgres", {
+								db: await sharedPglite(),
+							}),
 							redis: createKVClient(ns, "redis", { db: dbRedis }),
 							sqlite: createKVClient(ns, "sqlite", { db: dbSqlite }),
 						};

@@ -64,6 +64,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.8",
+    "@electric-sql/pglite": "^0.5.17",
     "@types/node": "^26.6.6",
     "@types/pg": "^8.23.1",
     "pg": "^8.23.1",

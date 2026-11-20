@@ -18,7 +18,9 @@ testsRunner([
 	{
 		name: "info sanity check",
 		fn({ clients }) {
-			for (const [type, client] of Object.entries(clients)) {
+			for (const [name, client] of Object.entries(clients)) {
+				// `pglite` is the postgres adapter on another database
+				const type = name === "pglite" ? "postgres" : name;
 				assert.deepEqual(client.info().type, type);
 			}
 		},
@@ -186,7 +188,7 @@ testsRunner([
 				// skip redis here...
 				if (_type === "redis") continue;
 
-				const client = createKVClient("", _type as any, {
+				const client = createKVClient("", _client.info().type as any, {
 					defaultTtl: 1,
 					ttlCleanupIntervalSec: 1,
 					db: _client.options.db,
@@ -283,7 +285,7 @@ testsRunner([
 		name: "B6: ttl:0 explicitly disables expiration (overrides defaultTtl)",
 		async fn({ clients }) {
 			for (const [_type, _client] of Object.entries(clients)) {
-				const client = createKVClient("app2:", _type as any, {
+				const client = createKVClient("app2:", _client.info().type as any, {
 					defaultTtl: 60,
 					db: _client.options.db,
 				});
